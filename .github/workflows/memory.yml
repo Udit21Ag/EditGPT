@@ -1,0 +1,30 @@
+name: memory
+
+# The RSS regression tier. It downloads ~285 MB of weights and runs the real erasers,
+# so it is nightly rather than per-push — but it must never be optional: the 8 GB
+# ceiling is the constraint the whole architecture is shaped around.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  memory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --all-extras --frozen
+
+      - name: Cache model weights
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/editgpt/models
+          key: models-${{ hashFiles('packages/models/src/editgpt_models/registry.py') }}
+
+      - run: uv run python -m editgpt_models.download
+      - run: uv run pytest packages -m memory -p no:randomly -v

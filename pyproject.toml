@@ -1,0 +1,109 @@
+[project]
+name = "editgpt"
+version = "0.1.0"
+description = "Agentic prompt-driven image editing"
+requires-python = ">=3.12"
+dependencies = [
+    # Extras are named explicitly: `uv sync --all-extras` applies to this project's own
+    # extras, not to a workspace member's, so `editgpt-models` alone leaves out CLIPSeg.
+    "editgpt-core[metrics]",
+    "editgpt-models[text]",
+    "editgpt-providers",
+    "editgpt-gateway",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+bench = ["datasets>=3.0", "scikit-image>=0.24"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "pytest-socket>=0.7",
+    "hypothesis>=6.112",
+    "respx>=0.21",
+    "mypy>=1.13",
+    "ruff>=0.8",
+    "psutil>=6.0",
+    "types-psutil>=6.0",
+]
+
+[tool.uv.workspace]
+members = ["packages/*", "apps/gateway"]
+
+[tool.uv.sources]
+editgpt-core = { workspace = true }
+editgpt-models = { workspace = true }
+editgpt-providers = { workspace = true }
+editgpt-gateway = { workspace = true }
+
+# ---------------------------------------------------------------- lint / format
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["spike"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "PT", "SIM", "RUF", "PERF", "ARG"]
+ignore = [
+    "B008",    # FastAPI's Depends() in defaults is the documented idiom
+    "PT011",   # pytest.raises(ValueError) without match= is fine for our own errors
+]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["ARG001", "ARG002"]   # fixtures arrive as unused-looking args
+
+# ---------------------------------------------------------------- types
+[tool.mypy]
+python_version = "3.12"
+strict = true
+exclude = ["spike/", "build/"]
+plugins = []
+
+[[tool.mypy.overrides]]
+# Vision and runtime libraries either ship no stubs or ship stale ones. We type our own
+# boundaries instead: every function that takes or returns an image annotates the array
+# type, and results crossing back from these libraries go through `np.asarray`.
+module = ["onnxruntime.*", "huggingface_hub.*", "transformers.*", "torch.*", "psutil.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# OpenCV bundles stubs written against numpy 1.x shape typing. Under numpy 2 they
+# reject `npt.NDArray[np.uint8]` at every call site — false positives that would push
+# us toward weakening our own annotations to satisfy theirs.
+module = ["cv2.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
+
+# ---------------------------------------------------------------- tests
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["packages", "apps", "evals", "benchmarks"]
+addopts = [
+    # Each package owns a `tests/` directory; importlib mode keeps their module names
+    # from colliding without forcing unique-but-meaningless file names.
+    "--import-mode=importlib",
+    "--strict-markers",
+    "--strict-config",
+    "-ra",
+    "--disable-socket",          # no test may reach the network by accident
+    "--allow-unix-socket",
+]
+markers = [
+    "live: hits a real network provider; excluded from `make check`, run nightly",
+    "slow: takes more than a few seconds",
+    "memory: asserts peak RSS; runs in its own process",
+]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+branch = true
+source = ["packages"]
+omit = ["*/tests/*"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]

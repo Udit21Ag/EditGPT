@@ -1,0 +1,32 @@
+# Local dependencies only. The gateway and worker run on the host during development so
+# a model benchmark and the stack do not contend for the same 8 GB.
+#
+# Use OrbStack or colima rather than Docker Desktop: it is worth about 1.5 GB of RAM,
+# which on this machine is the difference between a pipeline fitting and not.
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb"]
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: editgpt
+      POSTGRES_PASSWORD: editgpt
+      POSTGRES_DB: editgpt
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U editgpt"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:

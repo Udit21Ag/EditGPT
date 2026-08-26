@@ -1,0 +1,33 @@
+# Fast, local checks only. Anything that needs the full environment belongs in
+# `make check`; a pre-commit hook that takes a minute gets bypassed with --no-verify.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+        exclude: ^apps/web/tsconfig\.json$   # allows comments
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=2048"]
+      - id: detect-private-key
+      - id: no-commit-to-branch
+        args: ["--branch", "main"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: no-secrets-in-env-examples
+        name: .env files must never be committed
+        entry: bash -c 'git diff --cached --name-only | grep -E "(^|/)\.env$" && echo "refusing to commit a .env" && exit 1 || exit 0'
+        language: system
+        pass_filenames: false

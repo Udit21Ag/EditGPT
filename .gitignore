@@ -1,0 +1,42 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Node
+node_modules/
+.next/
+coverage/
+next-env.d.ts
+*.tsbuildinfo
+
+# Secrets and local state
+.env
+.env.local
+*.local
+
+# Model weights and generated artefacts.
+# evals/photos IS committed: an eval set you cannot reproduce is worthless,
+# and 8 MB of fixtures is a fair price for that.
+spike/models/
+spike/out/
+evals/out/
+benchmarks/out/
+
+# Fitted parameters ARE committed when they exist: they are inputs the pipeline loads,
+# not reports. Neither is present today — both fits were rejected on held-out data.
+!benchmarks/fitted_thresholds.json
+!benchmarks/eraser_choice.json
+
+# OS
+.DS_Store

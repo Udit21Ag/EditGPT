@@ -1,0 +1,8 @@
+node_modules/
+.next/
+coverage/
+.venv/
+spike/
+docs/
+pnpm-lock.yaml
+uv.lock
