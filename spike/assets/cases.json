@@ -1,0 +1,128 @@
+[
+  {
+    "id": "i1",
+    "file": "i1.jpg",
+    "op": "remove",
+    "target": "the car",
+    "box": [0.15, 0.63, 0.68, 0.88],
+    "fill": "empty cobblestone plaza, paving stones, daylight",
+    "note": "large rigid object, strong contact shadow"
+  },
+  {
+    "id": "i2",
+    "file": "i2.jpg",
+    "op": "remove",
+    "target": "the woman",
+    "box": [0.14, 0.22, 0.42, 0.9],
+    "fill": "manicured garden lawn and stone ledge, sunny day",
+    "note": "person, hair edges, seated on a ledge she occludes"
+  },
+  {
+    "id": "i4",
+    "file": "i4.jpeg",
+    "op": "remove",
+    "target": "the horse",
+    "box": [0.15, 0.37, 0.82, 0.83],
+    "fill": "green grass field, sunlit pasture",
+    "note": "organic shape on repeating grass texture"
+  },
+  {
+    "id": "i5",
+    "file": "i5.jpg",
+    "op": "remove",
+    "target": "the painting",
+    "box": [0.22, 0.03, 0.7, 0.56],
+    "fill": "plain dark teal painted wall",
+    "note": "flat rectangle on a plain wall"
+  },
+  {
+    "id": "i6",
+    "file": "i6.jpeg",
+    "op": "remove",
+    "target": "the laptop and its screen and keyboard",
+    "box": [0.1, 0.02, 0.62, 0.56],
+    "fill": "bamboo desk surface, plain wood",
+    "note": "prompt swept: beats bare 'the laptop' on both mask (0.888 vs 0.874) and fill cost (22.1 vs 31.3), and stays on the fast path instead of escalating"
+  },
+  {
+    "id": "i7",
+    "file": "i7.jpg",
+    "op": "remove",
+    "target": "the bird",
+    "box": [0.29, 0.64, 0.46, 0.83],
+    "fill": "clear blue sky",
+    "note": "small object on flat sky"
+  },
+  {
+    "id": "i8",
+    "file": "i8.jpeg",
+    "op": "remove",
+    "target": "the Eiffel Tower",
+    "box": [0.12, 0.04, 0.56, 0.8],
+    "fill": "blue sky with clouds above a treeline",
+    "note": "huge lattice over sky AND treeline"
+  },
+  {
+    "id": "i9",
+    "file": "i9.jpeg",
+    "op": "remove",
+    "target": "the cricket bat",
+    "box": [0.21, 0.4, 0.36, 0.93],
+    "fill": "cricket pitch grass and dry soil",
+    "note": "thin object held by a person"
+  },
+  {
+    "id": "i10",
+    "file": "i10.jpg",
+    "op": "remove",
+    "target": "the framed picture",
+    "box": [0.45, 0.364, 0.645, 0.47],
+    "fill": "plain beige painted wall",
+    "note": "15.9 MP camera. was i12 before the renumber. small object, stained gradient-lit wall"
+  },
+  {
+    "id": "i11",
+    "file": "i11.jpg",
+    "op": "remove",
+    "target": "the wall mounted white air conditioner with vents",
+    "box": [0.322, 0.151, 0.66, 0.261],
+    "fill": "plain beige painted wall",
+    "note": "15.9 MP camera. was i13. prompt swept: bare 'the air conditioner' gives bbox_iou 0.29 and cost 103; this phrasing gives 0.865 and cost 23 on the MI-GAN fast path"
+  },
+  {
+    "id": "i3",
+    "file": "i3.jpeg",
+    "op": "add",
+    "content": "a realistic moustache",
+    "box": [0.42, 0.42, 0.62, 0.52],
+    "fill": "a realistic moustache on the upper lip",
+    "note": "identity preservation; generative-only"
+  },
+  {
+    "id": "i11b",
+    "file": "i11.jpg",
+    "op": "add",
+    "content": "a television",
+    "box": [0.3, 0.33, 0.68, 0.56],
+    "fill": "a large flat screen television mounted on the wall, black bezel, screen switched off",
+    "note": "clear wall between the AC above and the table below \u2014 a fair test for an add"
+  },
+  {
+    "id": "i6b",
+    "file": "i6.jpeg",
+    "op": "add",
+    "content": "a chair",
+    "box": [0.55, 0.2, 1.0, 0.95],
+    "fill": "a wooden chair standing on the floor",
+    "note": "generous box; unavoidably overlaps the desk's right panel, cup and mouse"
+  },
+  {
+    "id": "i5b",
+    "file": "i5.jpg",
+    "op": "background",
+    "content": "a green wall",
+    "box": null,
+    "fill": "a plain green painted wall",
+    "note": "DEFERRED \u2014 the background op needs BiRefNet/RMBG matting, which Phase 0 never benchmarked. Kept as a placeholder so the gap is visible; run_final does not execute it."
+  }
+]
