@@ -1,0 +1,18 @@
+[project]
+name = "editgpt-core"
+version = "0.1.0"
+description = "Shared contracts for EditGPT: EditSpec, asset references, mask codec, quality metrics"
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2.9", "numpy>=2.0"]
+
+[project.optional-dependencies]
+# Only `editgpt_core.metrics` needs OpenCV. It is deliberately not a hard dependency
+# so the orchestrator process can import the contracts without loading an imaging stack.
+metrics = ["opencv-python-headless>=4.10"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/editgpt_core"]
