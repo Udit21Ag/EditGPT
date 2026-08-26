@@ -1,0 +1,177 @@
+[
+  {
+    "id": "i1",
+    "file": "i1.jpg",
+    "op": "remove",
+    "target": "the car",
+    "box": [0.15, 0.63, 0.68, 0.88],
+    "fill": "empty cobblestone plaza, paving stones, daylight",
+    "note": "Large rigid object with a strong contact shadow. The shadow is the open defect."
+  },
+  {
+    "id": "i2",
+    "file": "i2.jpg",
+    "op": "remove",
+    "target": "the woman",
+    "box": [0.14, 0.22, 0.42, 0.9],
+    "fill": "manicured garden lawn and stone ledge, sunny day",
+    "note": "Person with hair edges, seated on a ledge she occludes."
+  },
+  {
+    "id": "i4",
+    "file": "i4.jpeg",
+    "op": "remove",
+    "target": "the horse",
+    "box": [0.15, 0.37, 0.82, 0.83],
+    "fill": "green grass field, sunlit pasture",
+    "note": "Organic shape over a repeating grass texture."
+  },
+  {
+    "id": "i5",
+    "file": "i5.jpg",
+    "op": "remove",
+    "target": "the painting",
+    "box": [0.22, 0.03, 0.7, 0.56],
+    "fill": "plain dark teal painted wall",
+    "note": "Flat rectangle on a plain wall; the easiest removal in the set."
+  },
+  {
+    "id": "i6",
+    "file": "i6.jpeg",
+    "op": "remove",
+    "target": "the laptop and its screen and keyboard",
+    "box": [0.1, 0.02, 0.62, 0.56],
+    "fill": "bamboo desk surface, plain wood",
+    "note": "Prompt swept: beats bare 'the laptop' on mask (0.888 vs 0.874) and fill cost (22.1 vs 31.3), and stays on the fast path. Both erasers still smear the desk geometry."
+  },
+  {
+    "id": "i7",
+    "file": "i7.jpg",
+    "op": "remove",
+    "target": "the bird",
+    "box": [0.3, 0.655, 0.44, 0.815],
+    "fill": "clear blue sky",
+    "note": "Small object on flat sky. MI-GAN erases this perfectly where LaMa leaves a ghost. Box tightened 2026-08-26: the original was drawn loose, scoring IoU 0.533 on an unchanged, correct mask; the tight box scores 0.647."
+  },
+  {
+    "id": "i8",
+    "file": "i8.jpeg",
+    "op": "remove",
+    "target": "the Eiffel Tower",
+    "box": [0.12, 0.04, 0.56, 0.8],
+    "fill": "blue sky with clouds above a treeline",
+    "note": "Huge lattice spanning sky and treeline. Was unfixable until object-relative dilation and the chroma-only match landed."
+  },
+  {
+    "id": "i9",
+    "file": "i9.jpeg",
+    "op": "remove",
+    "target": "the cricket bat",
+    "box": [0.21, 0.4, 0.36, 0.93],
+    "fill": "cricket pitch grass and dry soil",
+    "note": "Thin object held by a person; the mask must not eat the gloves."
+  },
+  {
+    "id": "i10",
+    "file": "i10.jpg",
+    "op": "remove",
+    "target": "the framed picture",
+    "box": [0.45, 0.364, 0.645, 0.47],
+    "fill": "plain beige painted wall",
+    "note": "15.9 MP camera. Small object on a stained, gradient-lit wall."
+  },
+  {
+    "id": "i11",
+    "file": "i11.jpg",
+    "op": "remove",
+    "target": "the wall mounted white air conditioner with vents",
+    "box": [0.322, 0.151, 0.66, 0.261],
+    "fill": "plain beige painted wall",
+    "note": "15.9 MP camera. Prompt swept: bare 'the air conditioner' gives bbox_iou 0.29 and cost 103; this phrasing gives 0.865 and cost 23."
+  },
+  {
+    "id": "i3",
+    "file": "i3.jpeg",
+    "op": "add",
+    "content": "a realistic moustache",
+    "box": [0.42, 0.42, 0.62, 0.52],
+    "fill": "a realistic moustache on the upper lip",
+    "note": "Prompt swept: the simplest phrasing won (CLIP 31.40); elaborate prompt engineering scored worse. Identity drifts."
+  },
+  {
+    "id": "i11b",
+    "file": "i11.jpg",
+    "op": "add",
+    "content": "a television",
+    "box": [0.3, 0.33, 0.68, 0.56],
+    "fill": "a large flat screen television mounted on the wall, black bezel, screen switched off",
+    "note": "Clear wall between the AC above and the table below: clear, large enough, and semantically plausible. The add case that works."
+  },
+  {
+    "id": "i6b",
+    "file": "i6.jpeg",
+    "op": "add",
+    "content": "a chair",
+    "box": [0.55, 0.2, 1.0, 0.95],
+    "fill": "a wooden chair standing on the floor",
+    "note": "Generous box that unavoidably overlaps the desk. Produces a good chair and destroys the scene: the counter-example for add-mask placement."
+  },
+  {
+    "id": "i6c",
+    "file": "i6.jpeg",
+    "op": "background",
+    "target": "the wooden laptop desk",
+    "content": "a solid green background",
+    "box": [0.02, 0.02, 0.98, 0.96],
+    "fill": "",
+    "note": "Recolour the white product-shot backdrop to green. The box is the SUBJECT to keep. Deterministic compositing, no generative call: asking a diffusion model to paint a flat colour costs a round trip and returns something less exact."
+  },
+  {
+    "id": "i5b",
+    "file": "i5.jpg",
+    "op": "background",
+    "target": "the bedroom furniture",
+    "content": "a green wall",
+    "box": null,
+    "fill": "a plain green painted wall",
+    "deferred": true,
+    "note": "DEFERRED: needs BiRefNet/RMBG matting for a non-trivial subject, which Phase 0 never benchmarked. Kept so the gap stays visible."
+  },
+  {
+    "id": "i8u",
+    "file": "i8.jpeg",
+    "op": "upscale",
+    "box": null,
+    "fill": "",
+    "note": "Smallest fixture in the set (387x516). Tests tiled 2x enhancement: whether detail is added rather than smoothed, and whether the tile lattice stays invisible on sky and foliage."
+  },
+  {
+    "id": "i4r",
+    "file": "i4.jpeg",
+    "op": "replace",
+    "target": "the horse",
+    "content": "a white sheep grazing",
+    "box": [0.15, 0.37, 0.82, 0.83],
+    "fill": "a white sheep grazing in a sunlit green field",
+    "note": "Replace rather than remove. Tests whether the generative lane can substitute an object at the right scale and lighting, where removal would leave background."
+  },
+  {
+    "id": "i1s",
+    "file": "i1.jpg",
+    "op": "remove",
+    "target": "the car",
+    "box": [0.15, 0.63, 0.86, 0.92],
+    "fill": "empty cobblestone plaza, paving stones, daylight",
+    "note": "Shadow-inclusive variant of i1: the reference box is widened to cover the cast shadow. Tests whether scoring against a shadow-inclusive box rewards the residual pass, which is the only mechanism that touches shadows."
+  },
+  {
+    "id": "i3bg",
+    "file": "i3.jpeg",
+    "op": "background",
+    "target": "the woman",
+    "content": "a solid green background",
+    "box": [0.05, 0.02, 0.95, 0.98],
+    "fill": "",
+    "note": "Background replacement on a REAL scene rather than a flat backdrop. Expected to expose the limitation in TD-005: flood-fill declines, so it falls back to semantic segmentation, which loses hair detail."
+  }
+]
