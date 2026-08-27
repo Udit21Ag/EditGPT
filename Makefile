@@ -15,7 +15,7 @@ WEB   := $(PNPM) --filter @editgpt/web
 .PHONY: help setup check check-fast lint types harness test fmt fmt-check \
         bench-grounding bench-grounding-clipseg bench-removal bench-tune bench-classifier \
         bench-ambiguity \
-        web-lint web-types web-test models eval memory dev dev-lite worker \
+        web-lint web-types web-test web-build models eval memory dev dev-lite worker \
         migrate migration compose-up compose-s3 compose-down clean
 
 help:  ## Show the targets worth knowing
@@ -33,7 +33,7 @@ models:  ## Download the model weights (~285 MB) into the local cache
 
 # ---------------------------------------------------------------- the contract
 
-check: lint types harness test web-lint web-types web-test  ## Everything CI runs
+check: lint types harness test web-lint web-types web-test web-build  ## Everything CI runs
 	@echo ""
 	@echo "  ✔ check passed"
 
@@ -101,6 +101,13 @@ web-types:  ## tsc --noEmit
 
 web-test:  ## Vitest
 	$(WEB) test
+
+# In `check` because it is the only step that *renders* a page. Clerk Core 3 replaced the
+# control components with stubs that throw at render time, so lint, typecheck and test all
+# passed against an API that could not produce a working site — for as long as Clerk had
+# been installed. A check that claims to run what CI runs has to actually run it.
+web-build:  ## next build
+	$(WEB) build
 
 # The same paths `make lint` checks. They drifted once, and a file outside the fmt set
 # but inside the lint set fails CI with no local way to fix it.
