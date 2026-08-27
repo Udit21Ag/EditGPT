@@ -105,10 +105,16 @@ def ground(digest: str, phrase: str) -> dict[str, object]:
     and the client cannot do anything useful until it lands, so a job with progress would
     be ceremony around a request/response.
     """
-    from editgpt_worker.editors import decode_image, ground_phrase
+    from editgpt_worker.editors import decode_image, ground_phrase, working_size
 
     res = resources()
-    found = ground_phrase(decode_image(res.assets.get(digest)), phrase)
+    # Bounded, like an edit. `decode_image` keeps the upload's full resolution so a result
+    # can be returned at it (TD-021); grounding has no such need and three reasons not to:
+    # every candidate mask is produced at this size and travels to the browser, the client
+    # decodes each one to draw a thumbnail, and SAM resizes to 1024 internally regardless.
+    # A 15.9 MP upload would ship five 15.9 MP masks to render pictures a few hundred
+    # pixels wide.
+    found = ground_phrase(working_size(decode_image(res.assets.get(digest))), phrase)
     log.info(
         "ground.done",
         extra={

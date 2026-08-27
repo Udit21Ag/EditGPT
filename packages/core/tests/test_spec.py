@@ -71,13 +71,40 @@ def test_hand_drawn_mask_sources_need_a_mask(source: MaskSource) -> None:
         EditSpec(op=EditOp.REMOVE, image_ref=image(), mask_source=source, target="the car")
 
 
-def test_mask_dimensions_must_match_the_image() -> None:
-    with pytest.raises(ValidationError, match="but image is"):
+def test_a_mask_of_a_differently_shaped_image_is_refused() -> None:
+    """What the rule is for: a mask that belongs to some other picture."""
+    with pytest.raises(ValidationError, match="not the shape of"):
         EditSpec(
             op=EditOp.REMOVE,
             image_ref=image(800, 600),
             mask_source=MaskSource.BRUSH,
-            mask_ref=mask(640, 480),
+            mask_ref=mask(640, 640),
+        )
+
+
+def test_a_mask_at_a_smaller_resolution_is_accepted() -> None:
+    """A candidate from `POST /v1/masks` arrives at the resolution grounding ran at, not
+    the upload's. Requiring an exact match made the client upscale a mask the worker
+    scales straight back down — lossy work to satisfy a check that gained nothing."""
+    spec = EditSpec(
+        op=EditOp.REMOVE,
+        image_ref=image(800, 600),
+        mask_source=MaskSource.BRUSH,
+        mask_ref=mask(640, 480),
+    )
+    assert spec.mask_ref is not None
+    assert (spec.mask_ref.width, spec.mask_ref.height) == (640, 480)
+
+
+def test_a_mask_a_few_pixels_out_of_shape_is_still_refused() -> None:
+    """The tolerance absorbs one rescale's rounding and nothing more: five pixels wrong
+    on an 800x600 image scores 3000 against a budget of 1400."""
+    with pytest.raises(ValidationError, match="not the shape of"):
+        EditSpec(
+            op=EditOp.REMOVE,
+            image_ref=image(800, 600),
+            mask_source=MaskSource.BRUSH,
+            mask_ref=mask(645, 480),
         )
 
 

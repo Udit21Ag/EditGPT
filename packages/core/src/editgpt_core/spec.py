@@ -194,15 +194,35 @@ class EditSpec(BaseModel):
             raise ValueError("mask_source=text needs a `target` phrase to segment")
         if self.mask_source in {MaskSource.BRUSH, MaskSource.POINT} and self.mask_ref is None:
             raise ValueError(f"mask_source={self.mask_source} needs a `mask_ref`")
-        if self.mask_ref is not None and (self.mask_ref.width, self.mask_ref.height) != (
-            self.image_ref.width,
-            self.image_ref.height,
-        ):
-            raise ValueError(
-                f"mask is {self.mask_ref.width}x{self.mask_ref.height} but image is "
-                f"{self.image_ref.width}x{self.image_ref.height}"
-            )
+        if self.mask_ref is not None:
+            self._check_mask_covers_the_image()
         return self
+
+    def _check_mask_covers_the_image(self) -> None:
+        """The mask must describe *this* image, at any resolution.
+
+        Shape, not size. A mask is a region of a picture, and pinning it to one
+        rasterisation was over-specification with a cost: a candidate from `POST /v1/masks`
+        arrives at the resolution grounding ran at, so an exact-size rule forced the client
+        to upscale a mask that the worker's `_fit_mask` immediately scales back down —
+        lossy work in the browser to satisfy a check, and nothing gained.
+
+        Matching aspect keeps what the rule was actually for, which is catching a mask
+        belonging to a different image. The tolerance is derived rather than picked:
+        cross-multiplying makes this integer arithmetic, and rescaling by `s` moves each
+        side by less than a pixel, so the skew of a legitimate rescale cannot exceed
+        `width + height`. A mask five pixels wrong on an 800x600 image scores 3000 against
+        a budget of 1400, so this is far tighter than it looks.
+        """
+        assert self.mask_ref is not None  # narrowed by the caller, restated for mypy
+        mask_w, mask_h = self.mask_ref.width, self.mask_ref.height
+        image_w, image_h = self.image_ref.width, self.image_ref.height
+        if abs(mask_w * image_h - mask_h * image_w) > image_w + image_h:
+            raise ValueError(
+                f"mask is {mask_w}x{mask_h}, which is not the shape of a "
+                f"{image_w}x{image_h} image; a mask may be any size but must match the "
+                "image's aspect ratio"
+            )
 
     @property
     def is_generative(self) -> bool:

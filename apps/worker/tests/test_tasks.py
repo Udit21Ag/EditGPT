@@ -193,3 +193,56 @@ def test_the_pipe_prover_is_still_registered(res: Resources) -> None:
 def test_resources_are_cached_per_process() -> None:
     """Load-bearing: a Postgres pool and a Redis connection per task would dominate a fast one."""
     assert hasattr(resources, "cache_clear"), "resources() must stay lru_cached"
+
+
+# ---------------------------------------------------------------- grounding
+
+
+def test_grounding_runs_at_the_bounded_size(
+    res: Resources, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every candidate mask is produced at whatever size grounding ran at, and all of them
+    travel to the browser to be drawn as thumbnails a few hundred pixels wide.
+
+    This regressed once already: TD-021 changed `decode_image` to keep the upload's full
+    resolution so a *result* could be returned at it, and `ground` shared that function.
+    A 15.9 MP upload would have shipped five 15.9 MP masks.
+    """
+    from editgpt_core.rle import encode as encode_rle
+    from editgpt_core.spec import Grounding, MaskCandidate, MaskRef
+    from editgpt_worker import editors
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (4000, 3000), (10, 20, 30)).save(buffer, format="PNG")
+    digest = res.assets.put(buffer.getvalue(), content_type="image/png")
+
+    seen: list[tuple[int, int]] = []
+
+    def spy(image: object, phrase: str) -> Grounding:
+        del phrase
+        height, width = image.shape[:2]  # type: ignore[attr-defined]
+        seen.append((width, height))
+        import numpy as np
+
+        return Grounding(
+            candidates=[
+                MaskCandidate(
+                    box=(0.1, 0.1, 0.2, 0.2),
+                    score=0.9,
+                    mask_ref=MaskRef(
+                        **encode_rle(np.zeros((height, width), np.uint8)).model_dump()
+                    ),
+                )
+            ],
+            ambiguous=False,
+            margin=0.5,
+        )
+
+    monkeypatch.setattr(tasks, "ground_phrase", spy, raising=False)
+    monkeypatch.setattr(editors, "ground_phrase", spy)
+
+    answer = tasks.ground(digest, "the car")
+
+    assert seen == [(2048, 1536)], f"grounding ran at {seen}, not the bounded size"
+    assert answer["candidates"], "a candidate should have come back"
