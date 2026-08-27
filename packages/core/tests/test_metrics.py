@@ -10,7 +10,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 import pytest
-from editgpt_core.metrics import GROWTH_PENALTY, box_metrics, compare, fill_metrics
+from editgpt_core.metrics import DEFAULT_GROWTH_PENALTY, box_metrics, compare, fill_metrics
 
 
 def scene(shape: tuple[int, int] = (200, 200)) -> np.ndarray:
@@ -131,7 +131,7 @@ def test_growth_penalty_is_proportional_to_the_original_mask() -> None:
     identical = src.copy()
 
     delta = compare(identical, identical, src, base_mask, base_mask, grown)
-    assert delta == pytest.approx(GROWTH_PENALTY * 1.0, abs=0.5)
+    assert delta == pytest.approx(DEFAULT_GROWTH_PENALTY * 1.0, abs=0.5)
 
 
 def test_box_metrics_scores_a_well_placed_mask_as_a_hit() -> None:

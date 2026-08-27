@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from editgpt_models.pipeline import ACCEPT_COST, Erasers, erase
+from editgpt_models.config import load_thresholds
+from editgpt_models.pipeline import Erasers, erase
 
 
 def scene(shape: tuple[int, int] = (200, 200)) -> np.ndarray:
@@ -67,7 +68,7 @@ def test_a_worse_second_pass_is_rolled_back() -> None:
     """Phase 0 measured naive second passes making things worse. They must not stick.
 
     Fixtures are calibrated so the branch under test is actually taken: mid-grey costs
-    45.2, above ESCALATE_COST, so LaMa is tried; strong blue costs 142.0, so it loses.
+    45.2, above `escalate_cost`, so LaMa is tried; strong blue costs 142.0, so it loses.
     An earlier version of this test used a *perfect* first fill, which meant no strategy
     ever applied — it asserted "nothing was kept" and passed without a rollback occurring.
     """
@@ -91,7 +92,7 @@ def test_a_better_second_pass_is_kept() -> None:
 
     outcome = erase(erasers, src, mask)
     assert outcome.kept_passes >= 2
-    assert outcome.cost < ACCEPT_COST
+    assert outcome.cost < load_thresholds().accept_cost
 
 
 def test_a_third_pass_only_runs_while_the_result_is_unacceptable() -> None:

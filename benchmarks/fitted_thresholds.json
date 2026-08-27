@@ -1,0 +1,11 @@
+{
+  "min_sam_iou": 0.85,
+  "min_box_score": 0.25,
+  "escalate_cost": 25.0,
+  "accept_cost": 15.0,
+  "residual_max_growth": 0.5,
+  "residual_min_growth": 0.02,
+  "dilate_frac": 0.05,
+  "growth_penalty": 25.0,
+  "provenance": "Verified, not fitted, 2026-08-27. min_sam_iou swept on RefCOCOg (122 fit / 128 holdout) via the Grounding DINO path: the best-on-fit 0.92 scored 0.4518 on holdout against this 0.85 default at 0.4519, so the default was kept. The whole sweep spans 0.0006 mIoU, so the gate is not load-bearing on this path. min_box_score left at the upstream 0.25: mIoU cannot fit an abstention gate (see ADR-0002 for its precision/abstention curve). Cost and growth values are the Phase 0 calibrations, re-examined against paired ground truth on two datasets in benchmarks/out/removal.json and not superseded."
+}

@@ -27,13 +27,17 @@ RING_PX = 60
 EDGE_WEIGHT = 12.0
 """How much a detail-level mismatch counts relative to a colour error, in cost units."""
 
-GROWTH_PENALTY = 25.0
-"""Cost charged per unit of relative mask growth.
+DEFAULT_GROWTH_PENALTY = 25.0
+"""Cost charged per unit of relative mask growth, when the caller names no other.
 
 Calibrated on the Phase 0 residual-pass results, where raw cost preferred the variant
 that destroyed the image: the laptop desk gained 78% area for a 18.8-point cost
 improvement, while the car gained 35% for 11.4. At 25 the desk is correctly rejected
 (+0.7) and the car correctly accepted (-2.7).
+
+It is a *default*, not the value the system runs on. `editgpt_models.config.Thresholds`
+owns the fitted one and passes it in — this package cannot read that file, because `core`
+imports nothing of ours and is not going to start now.
 """
 
 MIN_MASK_PX = 64
@@ -105,12 +109,14 @@ def compare(
     eval_region: Mask,
     base_mask: Mask,
     candidate_mask: Mask,
+    *,
+    growth_penalty: float = DEFAULT_GROWTH_PENALTY,
 ) -> float:
     """How much better than `baseline` is `candidate`? Negative means better.
 
     Both are scored over the *same* `eval_region` — scoring each over its own mask
     compares different areas and rewards whichever erased more. On top of that, the
-    candidate is charged `GROWTH_PENALTY` for every unit of area it touched beyond
+    candidate is charged `growth_penalty` for every unit of area it touched beyond
     `base_mask`, which is what stops "erase more of the scene" from winning.
     """
     base = fill_metrics(baseline, source, eval_region).cost
@@ -118,7 +124,7 @@ def compare(
 
     base_area = max(int((base_mask > 0).sum()), 1)
     extra = max(int((candidate_mask > 0).sum()) - int((base_mask > 0).sum()), 0)
-    return (cand + GROWTH_PENALTY * extra / base_area) - base
+    return (cand + growth_penalty * extra / base_area) - base
 
 
 def box_metrics(

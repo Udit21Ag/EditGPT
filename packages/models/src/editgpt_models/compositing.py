@@ -20,6 +20,8 @@ import cv2
 import numpy as np
 import numpy.typing as npt
 
+from editgpt_models.config import load_thresholds
+
 RGB = npt.NDArray[np.uint8]
 Mask = npt.NDArray[np.uint8]
 Fill = Callable[[RGB, Mask], RGB]
@@ -31,23 +33,28 @@ CONTEXT = 1.6
 """Crop window as a multiple of the mask's longest side, to give the model surroundings."""
 
 RING_PX = 60
-DILATE_FRAC = 0.05
 DILATE_MIN = 8
 DILATE_MAX = 128
 
 
-def dilate_px(mask: Mask) -> int:
-    """How far to grow a mask past the object edge, relative to the object's size."""
+def dilate_px(mask: Mask, *, frac: float | None = None) -> int:
+    """How far to grow a mask past the object edge, relative to the object's size.
+
+    The fraction comes from `editgpt_models.config`, not a constant here, so a value
+    fitted on held-out data replaces the Phase 0 one without a code change.
+    """
+    if frac is None:
+        frac = load_thresholds().dilate_frac
     ys, xs = np.nonzero(mask)
     if len(xs) == 0:
         return DILATE_MIN
     longest = max(int(xs.max() - xs.min()), int(ys.max() - ys.min()))
-    return int(np.clip(round(DILATE_FRAC * longest), DILATE_MIN, DILATE_MAX))
+    return int(np.clip(round(frac * longest), DILATE_MIN, DILATE_MAX))
 
 
-def grow(mask: Mask) -> Mask:
+def grow(mask: Mask, *, frac: float | None = None) -> Mask:
     """Dilate a mask by the object-relative amount."""
-    size = dilate_px(mask)
+    size = dilate_px(mask, frac=frac)
     return np.asarray(cv2.dilate(mask, np.ones((size, size), np.uint8), iterations=1), np.uint8)
 
 

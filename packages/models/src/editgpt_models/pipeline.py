@@ -5,8 +5,8 @@ needs a guard, because Phase 0 measured that a *naive* second pass makes things 
 worse (+0.6 to +3.5 cost on every case tried). So the second pass always runs, and its
 output is kept only if it scores better than the first. Mandatory work, verified result.
 
-A third pass runs when the second leaves the fill still above `ACCEPT_COST`, trying a
-strategy the second did not.
+A third pass runs when the second leaves the fill still above `Thresholds.accept_cost`,
+trying a strategy the second did not.
 
 The three strategies, and what Phase 0 found about each:
 
@@ -32,29 +32,18 @@ import numpy as np
 from editgpt_core.metrics import MIN_MASK_PX, compare, fill_metrics
 
 from editgpt_models.compositing import RGB, Mask, grow
+from editgpt_models.config import Thresholds, load_thresholds
 from editgpt_models.erase import erase_lama, erase_migan, residual_mask
 
 log = logging.getLogger(__name__)
 
 Strategy = Literal["escalate", "residual", "cross"]
 
-ESCALATE_COST = 25.0
-"""Above this, the fast eraser's output is poor enough to pay for the slower one."""
-
-ACCEPT_COST = 15.0
-"""Below this the fill agrees with its surroundings well enough to stop working."""
-
-RESIDUAL_MAX_GROWTH = 0.50
-"""Cap on how much the residual pass may grow the mask.
-
-Measured: +35% of the object's area cleaned up a car's cast shadow, while +78% and
-+119% meant the detector had latched onto real scene content and the second erase
-destroyed it. `fill_metrics` cannot make this call — a larger flat erase scores better
-on it — so the cap is structural rather than learned at runtime.
-"""
-
-RESIDUAL_MIN_GROWTH = 0.02
-"""Below this the residual is not worth an extra multi-second model call."""
+# Every decision point below reads `editgpt_models.config.Thresholds`, which loads a
+# fitted file when one exists and documented defaults when it does not. There are
+# deliberately no threshold literals in this module: it used to carry four that shadowed
+# fields of the same name in `Thresholds`, so the file that claimed to own them changed
+# nothing when it was edited.
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +116,7 @@ def _apply(
     incumbent: RGB,
     mask: Mask,
     used_lama: bool,
+    thresholds: Thresholds,
 ) -> tuple[RGB, Mask, str] | None:
     """Produce a candidate for `strategy`, or None when it does not apply."""
     if strategy == "escalate":
@@ -138,7 +128,8 @@ def _apply(
 
     residual = residual_mask(incumbent, mask)
     growth = float((residual > 0).sum()) / max(float((mask > 0).sum()), 1)
-    if not residual.any() or not (RESIDUAL_MIN_GROWTH <= growth <= RESIDUAL_MAX_GROWTH):
+    lower, upper = thresholds.residual_min_growth, thresholds.residual_max_growth
+    if not residual.any() or not (lower <= growth <= upper):
         return None
     return (
         erasers.lama(incumbent, residual),
@@ -154,13 +145,19 @@ def erase(
     *,
     min_passes: int = 2,
     max_passes: int = 3,
+    thresholds: Thresholds | None = None,
 ) -> EraseOutcome:
     """Erase `mask` from `image`, running at least `min_passes` model passes.
 
     Returns the best-scoring result, along with a record of every pass attempted
     including the ones rolled back — a pass that was tried and rejected is a finding,
     not noise, and the critic loop in Phase 7 needs to see it.
+
+    `thresholds` defaults to the fitted set. It is a parameter so a benchmark can sweep
+    values without writing a file, and so a test can state the numbers it depends on
+    instead of inheriting whatever happens to be on disk.
     """
+    tuning = thresholds or load_thresholds()
     if int((mask > 0).sum()) < MIN_MASK_PX:
         raise ValueError(
             f"mask covers {int((mask > 0).sum())} px, below the {MIN_MASK_PX} px floor "
@@ -198,12 +195,12 @@ def erase(
 
     tried: set[Strategy] = set()
     for index in range(2, max_passes + 1):
-        if index > min_passes and cost <= ACCEPT_COST:
+        if index > min_passes and cost <= tuning.accept_cost:
             break
 
         order: list[Strategy] = (
             ["escalate", "residual", "cross"]
-            if cost > ESCALATE_COST
+            if cost > tuning.escalate_cost
             else ["residual", "escalate", "cross"]
         )
         choice = next((s for s in order if s not in tried), None)
@@ -211,7 +208,7 @@ def erase(
             break
 
         pass_started = time.monotonic()
-        produced = _apply(choice, erasers, image, best, best_mask, used_lama)
+        produced = _apply(choice, erasers, image, best, best_mask, used_lama, tuning)
         tried.add(choice)
         if produced is None:
             passes.append(
@@ -241,7 +238,15 @@ def erase(
 
         candidate, candidate_mask, note = produced
         region = np.maximum(best_mask, candidate_mask)
-        delta = compare(candidate, best, image, region, best_mask, candidate_mask)
+        delta = compare(
+            candidate,
+            best,
+            image,
+            region,
+            best_mask,
+            candidate_mask,
+            growth_penalty=tuning.growth_penalty,
+        )
         growth = float((candidate_mask > 0).sum() - (best_mask > 0).sum()) / max(
             float((best_mask > 0).sum()), 1
         )
@@ -291,6 +296,6 @@ def erase(
     return EraseOutcome(image=best, mask=best_mask, passes=passes)
 
 
-def prepare_mask(mask: Mask) -> Mask:
+def prepare_mask(mask: Mask, *, thresholds: Thresholds | None = None) -> Mask:
     """Grow a raw segmentation by the object-relative slack the erasers need."""
-    return grow(mask)
+    return grow(mask, frac=(thresholds or load_thresholds()).dilate_frac)
