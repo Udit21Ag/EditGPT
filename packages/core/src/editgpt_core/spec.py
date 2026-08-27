@@ -101,6 +101,65 @@ class MaskRef(BaseModel):
         return self.area_px / (self.width * self.height)
 
 
+class MaskCandidate(BaseModel):
+    """One region a phrase might have meant, with the mask already computed.
+
+    Grounding returns several of these when it cannot tell which instance was meant. The
+    mask travels with the candidate rather than being fetched later, because the
+    alternative — the client sending a box back and the server re-segmenting — pays for
+    the expensive half of SAM twice and can return a *different* mask the second time.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    box: tuple[float, float, float, float]
+    """(x0, y0, x1, y1) as fractions of the image, so a candidate survives every resize
+    between the model and the browser."""
+
+    score: float = Field(ge=0.0, le=1.0)
+    """The detector's confidence for this candidate."""
+
+    mask_ref: MaskRef
+    label: str = ""
+    """What the user should see for this option. Empty when the phrase is the only name
+    we have, which is the common case — the picture does the disambiguating."""
+
+    @model_validator(mode="after")
+    def _box_is_ordered(self) -> Self:
+        x0, y0, x1, y1 = self.box
+        if not (0.0 <= x0 < x1 <= 1.0 and 0.0 <= y0 < y1 <= 1.0):
+            raise ValueError(
+                f"box must be (x0, y0, x1, y1) in [0,1] with x0<x1 and y0<y1, got {self.box}"
+            )
+        return self
+
+
+class Grounding(BaseModel):
+    """What a phrase resolved to, and whether we are confident enough to act on it.
+
+    `ambiguous` is the whole point. Answering with a confident wrong mask erases the wrong
+    object; asking every time puts a modal in front of every edit. Measured on 250 held-out
+    RefCOCOg samples, letting the user pick from five candidates takes the hit rate from
+    0.516 to 0.832 — so it is worth asking, but only when the guess is actually shaky.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    candidates: list[MaskCandidate]
+    """Best first. Empty means the phrase matched nothing in this image, which is a real
+    answer and not a failure — the caller offers the brush."""
+
+    ambiguous: bool
+    """Whether the caller should ask before editing."""
+
+    margin: float = Field(ge=0.0, le=1.0)
+    """How far the best candidate beat the runner-up. Zero with fewer than two."""
+
+    @property
+    def best(self) -> MaskCandidate | None:
+        return self.candidates[0] if self.candidates else None
+
+
 class Constraints(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 

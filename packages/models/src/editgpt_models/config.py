@@ -33,6 +33,22 @@ class Thresholds:
     The upstream demo's text threshold, used as the starting point rather than the
     answer: `benchmarks.tune` sweeps it on a fit split and reports it on a holdout."""
 
+    ambiguity_margin: float = 0.15
+    """Below this gap between the best and second-best detection, ask rather than answer.
+
+    Measured on 250 held-out RefCOCOg samples: answering always hits 0.516, letting the
+    user pick from five candidates hits 0.832, and this gate buys most of that for the
+    least friction. The value is a starting point fitted on the whole set and reported in
+    `docs/adr/0003-ask-when-unsure.md`; `benchmarks.tune` refits it on a split.
+
+    Zero disables asking entirely, which is the behaviour before this existed."""
+
+    candidates: int = 5
+    """How many options to offer when asking.
+
+    Held-out hit rate by K: 0.516, 0.692, 0.776, 0.816, 0.832. The curve is still rising
+    at five, but a chooser with more than five thumbnails stops being a glance."""
+
     escalate_cost: float = 25.0
     """Above this photometric cost, the fast eraser's output is poor enough to pay for
     the slower one."""

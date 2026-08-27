@@ -14,6 +14,7 @@ WEB   := $(PNPM) --filter @editgpt/web
 
 .PHONY: help setup check check-fast lint types harness test fmt fmt-check \
         bench-grounding bench-grounding-clipseg bench-removal bench-tune bench-classifier \
+        bench-ambiguity \
         web-lint web-types web-test models eval memory dev dev-lite worker \
         migrate migration compose-up compose-s3 compose-down clean
 
@@ -73,6 +74,9 @@ bench-grounding-clipseg:  ## The same benchmark down the CLIPSeg path, for compa
 
 bench-removal:  ## Held-out removal on both paired datasets, with both quality proxies
 	$(PY) python -m benchmarks.removal --limit 69 --dataset both
+
+bench-ambiguity:  ## Could disambiguation help? recall@K and the margin signal
+	$(PY) python -m benchmarks.ambiguity --limit 250 --top-k 5
 
 bench-tune:  ## Fit thresholds on one split, report them on another
 	$(PY) python -m benchmarks.tune --limit 300
