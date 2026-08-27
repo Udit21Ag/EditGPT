@@ -27,6 +27,12 @@ class Thresholds:
     """Below this, SAM's own confidence says its refinement is not trustworthy and the
     coarser seed is kept instead."""
 
+    min_box_score: float = 0.25
+    """Below this, a Grounding DINO box is not a match for the phrase.
+
+    The upstream demo's text threshold, used as the starting point rather than the
+    answer: `benchmarks.tune` sweeps it on a fit split and reports it on a holdout."""
+
     escalate_cost: float = 25.0
     """Above this photometric cost, the fast eraser's output is poor enough to pay for
     the slower one."""

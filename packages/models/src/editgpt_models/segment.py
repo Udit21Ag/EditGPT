@@ -1,10 +1,18 @@
 """Turning an intent into a mask.
 
-Two stages, because they are good at different things. CLIPSeg turns free text into a
-coarse seed and localised 10 of 11 Phase 0 cases. MobileSAM turns a seed, a box or a
-brush stroke into a precise boundary — but its refinement helps a weak seed and *hurts*
-a strong one, so it is applied conditionally on the decoder's own confidence rather
-than unconditionally.
+Two stages, because they are good at different things. Something turns free text into a
+coarse region, and MobileSAM turns that region — or a box, or a brush stroke — into a
+precise boundary. SAM's refinement helps a weak prompt and *hurts* a strong one, so it
+is applied conditionally on the decoder's own confidence rather than unconditionally.
+
+The first stage has two implementations and they are not equivalent:
+
+* `mask_from_phrase` (**preferred**) prompts SAM with a Grounding DINO box. See
+  `detect.py` and `docs/adr/0002-text-grounding.md` for the measurement that put it
+  first.
+* `mask_from_seed` prompts SAM with a CLIPSeg heatmap. Retained for "stuff" nouns —
+  sky, grass, wall — which a detector trained on objects grounds poorly, and as the
+  fallback when the detector finds nothing.
 """
 
 from __future__ import annotations
@@ -22,13 +30,18 @@ ENCODER_SIZE = 1024
 SAM_MEAN = np.array([123.675, 116.28, 103.53], dtype=np.float32)
 SAM_STD = np.array([58.395, 57.12, 57.375], dtype=np.float32)
 
-MIN_SAM_IOU = load_thresholds().min_sam_iou
-"""Below this the decoder's own confidence says the refinement is not trustworthy.
 
-Originally derived from a single Phase 0 case. Now loaded from `editgpt_models.config`,
-so a value fitted on held-out data replaces the hand-picked one without a code change.
-Callers that need to vary it pass `min_iou=` explicitly.
-"""
+def min_sam_iou() -> float:
+    """Below this the decoder's own confidence says its refinement is not trustworthy.
+
+    Read on every call rather than snapshotted at import. It used to be a module constant
+    assigned from `load_thresholds()`, which looks wired but is not: the value froze at
+    the first import, so pointing `EDITGPT_THRESHOLDS` at a fitted file changed nothing
+    unless the process happened to start afterwards. Callers that need to vary it still
+    pass `min_iou=` explicitly.
+    """
+    return load_thresholds().min_sam_iou
+
 
 CLIPSEG_MODEL = "CIDAS/clipseg-rd64-refined"
 CLIPSEG_THRESHOLD = 0.4
@@ -114,6 +127,44 @@ def mask_from_box(
     return Segmentation(mask=mask, confidence=iou, source="sam-box")
 
 
+def mask_from_phrase(
+    detector: Any,
+    encoder: Any,
+    decoder: Any,
+    rgb: RGB,
+    phrase: str,
+    *,
+    min_score: float | None = None,
+    min_iou: float | None = None,
+) -> Segmentation:
+    """A phrase to a precise mask: detect the region, then let SAM find its boundary.
+
+    When SAM is not confident the detector's box is kept as a filled rectangle. That is
+    a worse mask than a traced boundary but a perfectly usable one for an erase — the
+    erasers take any shape — and it is a much better answer than a heatmap blob, which
+    is what the old fallback returned.
+    """
+    from editgpt_models.detect import detect
+
+    height, width = rgb.shape[:2]
+    found = detect(detector, rgb, phrase, min_score=min_score, top_k=1)
+    if not found:
+        # The phrase names nothing in this picture. A real outcome, not a failure: the
+        # caller shows the brush rather than erasing an arbitrary region.
+        return Segmentation(mask=np.zeros((height, width), np.uint8), confidence=0.0, source="none")
+
+    best = found[0]
+    refined = mask_from_box(encoder, decoder, rgb, best.box)
+    gate = min_sam_iou() if min_iou is None else min_iou
+    if refined.confidence >= gate and refined.mask.any():
+        return Segmentation(mask=refined.mask, confidence=best.score, source="sam-box")
+
+    x0, y0, x1, y1 = best.box
+    rectangle = np.zeros((height, width), np.uint8)
+    rectangle[round(y0 * height) : round(y1 * height), round(x0 * width) : round(x1 * width)] = 255
+    return Segmentation(mask=rectangle, confidence=best.score, source="detector-box")
+
+
 def mask_from_seed(
     encoder: Any, decoder: Any, rgb: RGB, heat: np.ndarray, *, min_iou: float | None = None
 ) -> Segmentation:
@@ -148,7 +199,7 @@ def mask_from_seed(
     labels = np.array([[2, 3, 1]], dtype=np.float32)
     refined, iou = _decode(decoder, embedding, coords, labels, (height, width), scale)
 
-    gate = MIN_SAM_IOU if min_iou is None else min_iou
+    gate = min_sam_iou() if min_iou is None else min_iou
     if iou < gate:
         return Segmentation(mask=seed * 255, confidence=iou, source="clipseg-seed")
     return Segmentation(mask=refined, confidence=iou, source="sam-refined")

@@ -11,6 +11,10 @@ dependencies = [
     "numpy>=2.0",
     "psutil>=6.0",
     "huggingface-hub>=0.26",
+    # Grounding DINO needs a BERT tokenizer. The Rust `tokenizers` wheel is ~3 MB and
+    # pulls in nothing else, where `transformers` would drag torch back in — which is
+    # precisely what moving grounding to ONNX was for.
+    "tokenizers>=0.20",
 ]
 
 [project.optional-dependencies]

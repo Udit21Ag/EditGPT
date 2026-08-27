@@ -7,6 +7,7 @@ one and link back, so the reasoning stays auditable.
 | # | Decision | Status |
 |---|---|---|
 | [0001](0001-model-routing.md) | Model selection and local/remote routing | accepted, extended after Phase 1 |
+| [0002](0002-text-grounding.md) | Grounding DINO replaces CLIPSeg as the text lane | accepted |
 
 ## When an ADR is warranted
 
