@@ -51,8 +51,10 @@ paid. It still stays visible.
 | TD-018 | Authentication is unimplemented pending a product decision   | resolved | P1       | gateway    |
 | TD-019 | Any signed-in user can fetch any image by its digest         | open     | P2       | gateway    |
 | TD-014 | Fine-tuning CLIPSeg is blocked on hardware                   | accepted | P2       | models     |
-| TD-015 | Relational referring expressions are not grounded at all     | open     | P1       | models     |
-| TD-016 | Recorded result dimensions assume the edit preserves them    | open     | P2       | store      |
+| TD-015 | Relational referring expressions are not grounded at all     | resolved | P1       | models     |
+| TD-016 | Recorded result dimensions assume the edit preserves them    | resolved | P2       | store      |
+| TD-020 | The background colour is fixed green, not requested          | open     | P2       | models     |
+| TD-021 | Edits come back at 2048 px, not the uploaded resolution      | open     | P1       | worker     |
 
 ---
 
@@ -363,7 +365,7 @@ membership. Signed, expiring URLs (already planned for Phase 9) are the compleme
 also let `<img src>` work without a header, which the frontend currently works around by
 fetching to a blob.
 
-### TD-014 —### TD-014 — Fine-tuning CLIPSeg is blocked on hardware
+### TD-014 — Fine-tuning CLIPSeg is blocked on hardware
 
 Status: accepted · Priority: P2 · Identified: 2026-08-26 · Area: `packages/models`
 **Problem:** grounding is the largest quality bottleneck (TD-012) and the obvious remedy
@@ -379,3 +381,60 @@ would be theatre. The data is free and ready (RefCOCOg train: 42,226 expressions
 **Trigger:** access to a GPU, or a hosted fine-tuning budget.
 **Resolution:** fine-tune CLIPSeg's decoder on RefCOCOg train, hold out val, report mIoU
 against the 0.389 baseline recorded here. Everything needed except the hardware exists.
+
+### TD-015 — Relational referring expressions are not grounded at all
+
+Status: resolved · Priority: P1 · Identified: 2026-08-27 · Resolved: 2026-08-27 · Area: `packages/models`
+**Problem:** 36% of held-out predictions fell below IoU 0.1, and the figure was
+**identical** for CLIPSeg and Grounding DINO. Those are the expressions naming an instance
+by its relation to something else; neither model reasons about relations, so both ground
+the noun and pick an arbitrary instance.
+**Resolution: stop guessing, offer the alternatives.** On 250 held-out samples, picking
+from five candidates takes the hit rate from **0.516 to 0.832** and mIoU from **0.469 to
+0.731** — inside the 0.65-0.75 band published _trained_ RES models occupy, which
+TD-012/TD-014 recorded as unreachable without a GPU. **The gap was never a model gap; it
+was a UI gap.** ADR-0003 has the ceiling curve and the gate.
+**What remains genuinely open:** 0.832 assumes the user picks correctly, which is
+unmeasurable without shipping it; and the default gate asks on 46% of phrases, a product
+judgement about friction rather than a measurement.
+
+### TD-016 — Recorded result dimensions assume the edit preserves them
+
+Status: resolved · Priority: P2 · Identified: 2026-08-27 · Resolved: 2026-08-27 · Area: `packages/store`
+**Problem:** `run_job` recorded the result using the _source_ dimensions from the spec —
+true for every operation shipped then, false for `UPSCALE`.
+**Resolution:** editors return a `Produced` carrying the bytes with their real content type
+and size, and the lifecycle records that. **A worse instance surfaced on the way:** AVIF
+was missing from the worker's format map, so an AVIF upload was silently re-encoded as PNG
+while the row still said `image/avif` — a 54 KB photograph came back as 476 KB of bytes
+served under a type they were not. Fixed by covering everything
+`uploads.ALLOWED_FORMATS` accepts, with a test asserting the two cannot drift. After:
+476 KB → 111 KB, genuinely AVIF.
+
+### TD-020 — The background colour is fixed green, not requested
+
+Status: open · Priority: P2 · Identified: 2026-08-27 · Area: `packages/models`
+**Problem:** `BACKGROUND` always paints the same green, so "change the background to blue"
+produces green.
+**Why it matters:** the operation advertises a capability it does not have, and it fails
+_silently_ — the edit succeeds and returns the wrong colour.
+**Workaround:** none. The golden set only ever asks for green, which is how this survived.
+**Why deferred:** parsing a colour from free text belongs to the intent agent, which does
+not exist yet; a colour table here would be the wrong home for it.
+**Trigger:** any request for a background colour other than green.
+**Resolution:** carry the colour on `EditSpec` and let intent parsing fill it in.
+
+### TD-021 — Edits come back at 2048 px, not the uploaded resolution
+
+Status: open · Priority: P1 · Identified: 2026-08-27 · Area: `apps/worker`
+**Problem:** the worker downscales to 2048 px on the longest side before editing, so a
+15.9 MP upload returns at ~3 MP.
+**Why it matters:** a visible product decision wearing an implementation detail's clothes.
+Nobody asked for their photograph to be shrunk, and the API does not say it happened.
+**Why it exists:** the gateway's 40 MP cap bounds _memory_; this bounds _time_. A 15.9 MP
+erase is minutes of model work, and the multi-pass loop runs an eraser up to three times.
+**Workaround:** none.
+**Trigger:** any user who downloads a result.
+**Resolution:** edit the crop at full resolution and paste back into the original — the
+compositor already works that way for the region it touches, so the machinery exists.
+Until then the response should at least declare the size it returns.

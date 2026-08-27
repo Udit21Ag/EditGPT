@@ -389,8 +389,13 @@ ground the noun and then pick an arbitrary instance. `detect()` already ranks ev
 surfacing the top few turns a wrong edit into one extra click. Plus the vision_tools MCP
 server with tiered disclosure.
 
-**Exit:** a relational phrase returns candidates rather than a confident wrong mask; RSS
-test green with the detector in the slot.
+**Exit met, 27 Aug 2026.** `POST /v1/masks` returns ranked candidates and flags ambiguity;
+verified live on six RefCOCOg samples with recorded narrow margins, five of which correctly
+asked. `make memory` green with the detector resident, including a test that the detector
+and an eraser are never resident together.
+
+The vision_tools MCP server moves to Phase 6, where the agent mesh that needs it is built —
+building a disclosure mechanism before anything discloses through it is guesswork.
 
 ### Phase 5 — Editing layer (5–6 days)
 
@@ -404,7 +409,15 @@ object-relative dilation at 5% of the longest side).
 Carry the two Phase 0 fixes over verbatim — they are what made i8 work: match chroma but **not** luminance,
 and scale dilation with the object rather than using a pixel constant.
 
-**Exit:** "remove the car" and "add a moustache" both work end-to-end from a CLI script.
+**Exit met, 27 Aug 2026 — and through the real queue, not a CLI script.** `editgpt_models.execute`
+holds the one edit dispatch; the worker and the golden set both call it. Verified live:
+upload → ground → job → SSE → an image with the car gone, 12.8 s end to end, 7.8% of pixels
+changed. Cost-ledger writes land on every job.
+
+The extraction was checked against the golden set with the *same* grounding on both sides:
+all 11 removals identical on cost and pass sequence. Only `bbox_iou` moved, deliberately —
+it now measures the raw mask rather than the dilated one, so it scores grounding rather than
+the eraser's footprint.
 
 ### Phase 6 — Agent mesh (6–7 days)
 

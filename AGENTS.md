@@ -63,24 +63,24 @@ question to resolve silently. Never change product semantics to make a document 
 
 Verified against the repository. Do not invent alternatives.
 
-| Purpose                          | Command                                                           |
-| -------------------------------- | ----------------------------------------------------------------- |
-| install everything               | `make setup`                                                      |
-| download model weights (~552 MB) | `make models`                                                     |
-| **the gate**                     | `make check`                                                      |
-| fast inner loop (Python only)    | `make check-fast`                                                 |
-| lint / format check              | `make lint` · fix with `make fmt`                                 |
-| type check (mypy strict)         | `make types`                                                      |
-| tests with coverage              | `make test`                                                       |
-| memory regression tier           | `make memory`                                                     |
-| golden image set                 | `make eval`                                                       |
-| web lint / types / tests         | `make web-lint` · `make web-types` · `make web-test`              |
-| run gateway only                 | `make dev-lite`                                                   |
-| run the Celery worker            | `make worker`                                                     |
-| full local stack                 | `make dev`                                                        |
-| start redis + postgres           | `make compose-up` · stop with `make compose-down`                 |
-| apply / create a migration       | `make migrate` · `make migration NAME="..."`                      |
-| held-out benchmarks              | `make bench-grounding` · `make bench-removal` · `make bench-tune` |
+| Purpose                          | Command                                                                                    |
+| -------------------------------- | ------------------------------------------------------------------------------------------ |
+| install everything               | `make setup`                                                                               |
+| download model weights (~552 MB) | `make models`                                                                              |
+| **the gate**                     | `make check`                                                                               |
+| fast inner loop (Python only)    | `make check-fast`                                                                          |
+| lint / format check              | `make lint` · fix with `make fmt`                                                          |
+| type check (mypy strict)         | `make types`                                                                               |
+| tests with coverage              | `make test`                                                                                |
+| memory regression tier           | `make memory`                                                                              |
+| golden image set                 | `make eval`                                                                                |
+| web lint / types / tests         | `make web-lint` · `make web-types` · `make web-test`                                       |
+| run gateway only                 | `make dev-lite`                                                                            |
+| run the Celery worker            | `make worker`                                                                              |
+| full local stack                 | `make dev`                                                                                 |
+| start redis + postgres           | `make compose-up` · stop with `make compose-down`                                          |
+| apply / create a migration       | `make migrate` · `make migration NAME="..."`                                               |
+| held-out benchmarks              | `make bench-grounding` · `make bench-removal` · `make bench-ambiguity` · `make bench-tune` |
 
 `make check` runs exactly what CI runs, in CI's order — literally: each CI step invokes
 the corresponding Makefile target, so the two cannot drift.

@@ -1102,6 +1102,8 @@ source = { editable = "apps/worker" }
 dependencies = [
     { name = "celery" },
     { name = "editgpt-core" },
+    { name = "editgpt-models" },
+    { name = "editgpt-providers" },
     { name = "editgpt-store" },
     { name = "pydantic-settings" },
     { name = "redis" },
@@ -1111,6 +1113,8 @@ dependencies = [
 requires-dist = [
     { name = "celery", specifier = ">=5.4" },
     { name = "editgpt-core", editable = "packages/core" },
+    { name = "editgpt-models", editable = "packages/models" },
+    { name = "editgpt-providers", editable = "packages/providers" },
     { name = "editgpt-store", editable = "packages/store" },
     { name = "pydantic-settings", specifier = ">=2.6" },
     { name = "redis", specifier = ">=5.2" },

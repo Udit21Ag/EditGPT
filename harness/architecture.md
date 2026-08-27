@@ -19,14 +19,14 @@ a larger host.
 
 ## Structure by responsibility
 
-| Component            | Owns                                                          |
-| -------------------- | ------------------------------------------------------------- |
-| `packages/core`      | contracts every component speaks; quality scoring             |
-| `packages/models`    | model lifetime, grounding, erasure, compositing, pass routing |
-| `packages/providers` | remote generation, failover, circuit breaking                 |
-| `apps/gateway`       | HTTP surface: health, capabilities, (later) upload and jobs   |
-| `apps/web`           | browser UI: upload, region selection, progress                |
-| `evals`              | the golden set and its runner                                 |
+| Component            | Owns                                                                   |
+| -------------------- | ---------------------------------------------------------------------- |
+| `packages/core`      | contracts every component speaks; quality scoring                      |
+| `packages/models`    | model lifetime, grounding, erasure, compositing, **the edit dispatch** |
+| `packages/providers` | remote generation, failover, circuit breaking                          |
+| `apps/gateway`       | HTTP surface: health, capabilities, (later) upload and jobs            |
+| `apps/web`           | browser UI: upload, region selection, progress                         |
+| `evals`              | the golden set and its runner                                          |
 
 ## Diagram
 
@@ -38,7 +38,9 @@ image + (brush | box | text)
         │            rejects unactionable work at construction
         ▼
    GROUNDING                                  packages/models/segment.py
-        │  text ─► Grounding DINO ─► best box       (mIoU 0.469 held out)
+        │  text ─► Grounding DINO ─► ranked boxes   (mIoU 0.469 answering top-1)
+        │  narrow top-two margin ─► ASK: return candidates, do not edit
+        │                           (0.832 hit / 0.731 mIoU if the user picks; ADR-0003)
         │  box | brush | seed ─► MobileSAM ─► mask + its own confidence
         │  below the gate the detector's box is kept as a filled rectangle
         │  CLIPSeg remains as a seed source for "stuff" nouns; see ADR-0002
@@ -67,15 +69,15 @@ image + (brush | box | text)
 
 Stating this honestly is the point of the section.
 
-| Stage      | Today                                | Planned                                     |
-| ---------- | ------------------------------------ | ------------------------------------------- |
-| Intent     | `EditSpec` constructed by the caller | agent parses free text, asks when ambiguous |
-| Router     | a function in `pipeline.py`          | an agent behind A2A                         |
-| Multi-pass | automatic, capped at 3               | user-triggered "needs more work"            |
-| Critic     | scoring inline                       | an agent with a retry budget                |
-| Transport  | HTTP + Celery over Redis             | A2A JSON-RPC + SSE between processes        |
-| Storage    | content-addressed, local disk or S3  | a hosted S3 endpoint, chosen at deploy time |
-| Jobs       | queue, worker, SSE progress          | critic-driven retries within a job          |
+| Stage      | Today                                   | Planned                                     |
+| ---------- | --------------------------------------- | ------------------------------------------- |
+| Intent     | `EditSpec` constructed by the caller    | agent parses free text, asks when ambiguous |
+| Router     | `execute.py`, one dispatch by operation | an agent behind A2A                         |
+| Multi-pass | automatic, capped at 3                  | user-triggered "needs more work"            |
+| Critic     | scoring inline                          | an agent with a retry budget                |
+| Transport  | HTTP + Celery over Redis                | A2A JSON-RPC + SSE between processes        |
+| Storage    | content-addressed, local disk or S3     | a hosted S3 endpoint, chosen at deploy time |
+| Jobs       | queue, worker, SSE progress             | critic-driven retries within a job          |
 
 **There is no agent mesh yet.** The pipeline is a library. Splitting it into processes
 changes deployment, not shape — which is what `EditSpec` is for.
