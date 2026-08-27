@@ -3,7 +3,7 @@
 Two tests at two costs. The first is synthetic and runs on every commit: it proves the
 slot actually releases memory rather than merely forgetting a reference. The second
 drives the real models and is marked `memory` and `slow`, so it runs on demand and
-nightly rather than on every push — it needs ~285 MB of weights.
+nightly rather than on every push — it needs ~552 MB of weights.
 
 Both assert against `DEFAULT_RSS_CEILING_MB` **over repeated iterations**. Peak RSS
 varies about +/-15% run to run because the ONNX arena allocator is not deterministic,
@@ -85,7 +85,7 @@ def test_real_pipeline_peak_rss_over_repeated_runs() -> None:
     """Drive the real erasers and assert the ceiling holds over several iterations.
 
     Skipped unless the weights are already present, so a fresh checkout does not
-    silently download 285 MB during a test run.
+    silently download 552 MB during a test run.
     """
     from editgpt_models.erase import erase_migan, make_session
     from editgpt_models.registry import model_path
@@ -110,3 +110,61 @@ def test_real_pipeline_peak_rss_over_repeated_runs() -> None:
     assert peak < DEFAULT_RSS_CEILING_MB, (
         f"peak RSS {peak:.0f} MB exceeded the {DEFAULT_RSS_CEILING_MB} MB ceiling"
     )
+
+
+@pytest.mark.memory
+@pytest.mark.slow
+def test_the_detector_peak_rss_over_repeated_runs() -> None:
+    """Grounding DINO is the heaviest model in the registry, so the ceiling rests on it.
+
+    Registered at 1372 MB peak from a single probe. A single sample once set this ceiling
+    20% too low, so this drives it repeatedly and asserts against the worst iteration.
+    """
+    from editgpt_models.detect import DETECTOR_KEY, detect, load_detector
+    from editgpt_models.registry import model_path
+
+    try:
+        model_path(DETECTOR_KEY, download=False)
+    except FileNotFoundError:
+        pytest.skip("model weights not present; run `make models` first")
+
+    slot = ModelSlot(max_resident=1)
+    rng = np.random.default_rng(0)
+    image = rng.integers(0, 255, (1024, 768, 3), dtype=np.uint8)
+
+    peak = 0.0
+    for _ in range(3):
+        detector = slot.acquire(DETECTOR_KEY, load_detector)
+        detect(detector, image, "the car")
+        peak = max(peak, slot.rss_mb())
+
+    assert peak < DEFAULT_RSS_CEILING_MB, (
+        f"peak RSS {peak:.0f} MB exceeded the {DEFAULT_RSS_CEILING_MB} MB ceiling"
+    )
+
+
+@pytest.mark.memory
+@pytest.mark.slow
+def test_the_detector_and_an_eraser_are_never_resident_together() -> None:
+    """The invariant that makes the budget work, with the two real heaviest models.
+
+    Their measured peaks are 1372 MB and 1150 MB. Resident at once they would breach the
+    2200 MB ceiling, which is exactly what the slot exists to prevent — and a synthetic
+    block cannot prove it, because a synthetic block is not 1.4 GB of ONNX arena.
+    """
+    from editgpt_models.detect import DETECTOR_KEY, load_detector
+    from editgpt_models.erase import make_session
+    from editgpt_models.registry import model_path
+
+    try:
+        migan = model_path("migan", download=False)
+        model_path(DETECTOR_KEY, download=False)
+    except FileNotFoundError:
+        pytest.skip("model weights not present; run `make models` first")
+
+    slot = ModelSlot(max_resident=1)
+    slot.acquire(DETECTOR_KEY, load_detector)
+    slot.acquire("migan", lambda: make_session(migan))
+
+    assert slot.resident == ["migan"], f"{slot.resident} resident; the detector was not evicted"
+    assert slot.rss_mb() < DEFAULT_RSS_CEILING_MB

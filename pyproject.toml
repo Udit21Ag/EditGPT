@@ -9,7 +9,9 @@ dependencies = [
     "editgpt-core[metrics]",
     "editgpt-models[text]",
     "editgpt-providers",
-    "editgpt-gateway",
+    "editgpt-store[s3]",
+    "editgpt-gateway[clerk]",
+    "editgpt-worker",
     "python-dotenv>=1.0",
 ]
 
@@ -31,13 +33,15 @@ dev = [
 ]
 
 [tool.uv.workspace]
-members = ["packages/*", "apps/gateway"]
+members = ["packages/*", "apps/gateway", "apps/worker"]
 
 [tool.uv.sources]
 editgpt-core = { workspace = true }
 editgpt-models = { workspace = true }
 editgpt-providers = { workspace = true }
+editgpt-store = { workspace = true }
 editgpt-gateway = { workspace = true }
+editgpt-worker = { workspace = true }
 
 # ---------------------------------------------------------------- lint / format
 [tool.ruff]
@@ -62,11 +66,30 @@ strict = true
 exclude = ["spike/", "build/"]
 plugins = []
 
+# Each package owns a `tests/` directory, so `conftest.py` and a name like `test_jobs.py`
+# occur more than once. pytest resolves that with `--import-mode=importlib`; mypy needs
+# to be told the same thing a different way. Listing the src roots keeps a package module
+# named `editgpt_core.spec` rather than `packages.core.src.editgpt_core.spec`, while a
+# test file falls back to a path-derived name and stops colliding.
+explicit_package_bases = true
+mypy_path = """packages/core/src:packages/models/src:packages/providers/src:\
+packages/store/src:apps/gateway/src:apps/worker/src"""
+
 [[tool.mypy.overrides]]
 # Vision and runtime libraries either ship no stubs or ship stale ones. We type our own
 # boundaries instead: every function that takes or returns an image annotates the array
 # type, and results crossing back from these libraries go through `np.asarray`.
-module = ["onnxruntime.*", "huggingface_hub.*", "transformers.*", "torch.*", "psutil.*"]
+module = [
+    "onnxruntime.*",
+    "huggingface_hub.*",
+    "transformers.*",
+    "torch.*",
+    "psutil.*",
+    "tokenizers.*",
+    "celery.*",
+    "boto3.*",
+    "botocore.*",
+]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -80,7 +103,7 @@ follow_imports = "skip"
 # ---------------------------------------------------------------- tests
 [tool.pytest.ini_options]
 minversion = "8.0"
-testpaths = ["packages", "apps", "evals", "benchmarks"]
+testpaths = ["packages", "apps", "evals", "benchmarks", "tests"]
 addopts = [
     # Each package owns a `tests/` directory; importlib mode keeps their module names
     # from colliding without forcing unique-but-meaningless file names.
@@ -95,13 +118,19 @@ markers = [
     "live: hits a real network provider; excluded from `make check`, run nightly",
     "slow: takes more than a few seconds",
     "memory: asserts peak RSS; runs in its own process",
+    # Included in `make check`: these skip themselves when the service is not up, so a
+    # checkout with no containers still runs green, and CI supplies one so they really run.
+    "service: needs a live backing service (Postgres, MinIO); skips cleanly without one",
 ]
 asyncio_mode = "auto"
 
 [tool.coverage.run]
 branch = true
-source = ["packages"]
-omit = ["*/tests/*"]
+# `apps` is in here as well as `packages`: the gateway and the worker are where the
+# input boundary and the job lifecycle live, and leaving them out of the gate meant the
+# most security-sensitive code in the repository counted for nothing.
+source = ["packages", "apps"]
+omit = ["*/tests/*", "*/migrations/*"]
 
 [tool.coverage.report]
 fail_under = 80

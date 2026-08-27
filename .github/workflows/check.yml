@@ -17,6 +17,26 @@ jobs:
   python:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+
+    # The migration is the one thing SQLite cannot verify. It was generated against
+    # SQLite, reviewed, merged, and failed on its first real run — Postgres rejected an
+    # untyped bind for a `uuid` column. `packages/store/tests/test_migrations.py` applies
+    # and rolls it back against this service; without it those tests skip and the schema
+    # goes unverified again.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: editgpt
+          POSTGRES_PASSWORD: editgpt
+          POSTGRES_DB: editgpt
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U editgpt"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -29,22 +49,32 @@ jobs:
       - run: uv python install 3.12
       - run: uv sync --all-extras --frozen
 
-      - name: Lint
+      # MinIO comes from the compose file rather than a second definition here, so the
+      # thing CI exercises is the thing a developer runs. It is started as a step and not
+      # as a service container because it needs a `command`, which service containers
+      # cannot express.
+      - name: Start object storage
         run: |
-          uv run ruff check packages apps evals
-          uv run ruff format --check packages apps evals
+          docker compose --profile s3 up -d minio
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:9000/minio/health/live && break || sleep 2
+          done
+
+      # Each step calls the Makefile rather than repeating its command. `AGENTS.md`
+      # promises `make check` runs exactly what CI runs; spelling the commands out twice
+      # made that a claim rather than a fact, and they had already drifted — CI was
+      # linting three directories where the Makefile linted six.
+      - name: Lint
+        run: make lint
 
       - name: Types
-        run: uv run mypy packages apps
+        run: make types
 
       - name: Harness integrity
-        run: uv run python scripts/check_harness.py
+        run: make harness
 
       - name: Tests
-        run: |
-          uv run pytest packages apps evals \
-            -m "not slow and not live" \
-            --cov --cov-report=xml --cov-report=term-missing
+        run: make test COV_ARGS="--cov-report=xml --cov-report=term-missing"
 
       - uses: actions/upload-artifact@v4
         if: always()

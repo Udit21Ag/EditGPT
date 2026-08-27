@@ -39,7 +39,7 @@ DOCS = [
 
 LINK = re.compile(r"\[[^\]]*\]\(([^)#][^)]*)\)")
 BACKTICK_PATH = re.compile(r"`([A-Za-z0-9_./-]+/[A-Za-z0-9_./-]+\.(?:md|py|ts|tsx|json|yml|toml))`")
-MAKE_TARGET = re.compile(r"`make ([a-z][a-z-]*)")
+MAKE_TARGET = re.compile(r"`make ([a-z][a-z0-9-]*)")
 SECRET = re.compile(
     r"(AIza[0-9A-Za-z_-]{20,}|sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}"
     r"|-----BEGIN [A-Z ]*PRIVATE KEY-----)"
@@ -70,7 +70,7 @@ def is_generated(path: str) -> bool:
 
 def make_targets() -> set[str]:
     text = (ROOT / "Makefile").read_text()
-    return set(re.findall(r"^([a-z][a-z-]*):", text, re.M))
+    return set(re.findall(r"^([a-z][a-z0-9-]*):", text, re.M))
 
 
 def main() -> int:
@@ -179,6 +179,32 @@ def main() -> int:
             failures.append(
                 f"harness/exec-plans/active/{plan.name}: untouched for {age_days:.0f} days — "
                 "complete it, or move it to completed/ with the outcome"
+            )
+
+    # A malformed .env is caught here rather than by whichever tool reads it first.
+    #
+    # Real incident: a PEM public key was pasted across ten lines under `CLERK_JWT_KEY=`.
+    # python-dotenv shrugged and set the variable to empty, so the gateway silently fell
+    # back to fetching JWKS over the network, while `docker compose` refused to start at
+    # all with "key cannot contain a space". Two different failures, one cause, neither
+    # naming it. A multi-line value must be quoted with escaped newlines.
+    env_file = ROOT / ".env"
+    if env_file.exists():
+        bad = [
+            number
+            for number, raw in enumerate(env_file.read_text().splitlines(), 1)
+            if (line := raw.strip())
+            and not line.startswith("#")
+            and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", line.partition("=")[0])
+        ]
+        if bad:
+            # Reported as one finding: a pasted multi-line value produces a run of these,
+            # and ten copies of the same sentence buries whatever else is wrong.
+            where = f"line {bad[0]}" if len(bad) == 1 else f"lines {bad[0]}-{bad[-1]}"
+            failures.append(
+                f".env: {where} are not KEY=VALUE. A value spanning lines must be quoted "
+                'with escaped newlines, e.g. KEY="-----BEGIN PUBLIC KEY-----\\n...\\n-----END '
+                'PUBLIC KEY-----"'
             )
 
     # .env must not be tracked by git.

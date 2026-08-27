@@ -40,3 +40,9 @@ benchmarks/out/
 
 # OS
 .DS_Store
+
+# pnpm is the package manager (see `packageManager` in package.json). An npm or yarn
+# lockfile means someone ran the wrong tool, and two lockfiles describing different trees
+# is worse than none — `npm ci` would install something `pnpm-lock.yaml` never sanctioned.
+package-lock.json
+yarn.lock

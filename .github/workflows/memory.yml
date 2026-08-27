@@ -1,6 +1,6 @@
 name: memory
 
-# The RSS regression tier. It downloads ~285 MB of weights and runs the real erasers,
+# The RSS regression tier. It downloads ~552 MB of weights and runs the real erasers,
 # so it is nightly rather than per-push — but it must never be optional: the 8 GB
 # ceiling is the constraint the whole architecture is shaped around.
 on:
