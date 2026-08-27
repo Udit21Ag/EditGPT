@@ -15,12 +15,16 @@ Stack: Python 3.12 (uv workspace) · FastAPI · ONNX Runtime · PyTorch (one mod
 TypeScript · Next.js 15 · Tailwind v4 · pnpm workspace · Docker Compose · GitHub Actions.
 
 ```
-packages/core        contracts: EditSpec, AssetRef, MaskRef, RLE codec, quality metrics
-packages/models      ModelSlot, segmentation, erasers, multi-pass pipeline
+packages/core        contracts: EditSpec, Job, AssetRef, MaskRef, RLE codec, metrics
+packages/models      ModelSlot, grounding, erasers, multi-pass pipeline, thresholds
 packages/providers   remote provider protocol, circuit breaker, failover
-apps/gateway         FastAPI: health, capabilities (job pipeline not built yet)
+packages/store       content-addressed assets, the schema, job persistence, progress
+apps/gateway         FastAPI: upload, job intake, SSE progress, rate limits
+apps/worker          Celery: the job lifecycle
 apps/web             Next.js frontend
 evals/               golden image set and its runner
+benchmarks/          held-out datasets and the threshold fitting
+tests/               integration across apps; everything else lives beside its code
 harness/             this operating system
 docs/                project documentation and ADRs
 spike/               frozen Phase 0 feasibility work — history, not a dependency
@@ -59,23 +63,27 @@ question to resolve silently. Never change product semantics to make a document 
 
 Verified against the repository. Do not invent alternatives.
 
-| Purpose                          | Command                                              |
-| -------------------------------- | ---------------------------------------------------- |
-| install everything               | `make setup`                                         |
-| download model weights (~285 MB) | `make models`                                        |
-| **the gate**                     | `make check`                                         |
-| fast inner loop (Python only)    | `make check-fast`                                    |
-| lint / format check              | `make lint` · fix with `make fmt`                    |
-| type check (mypy strict)         | `make types`                                         |
-| tests with coverage              | `make test`                                          |
-| memory regression tier           | `make memory`                                        |
-| golden image set                 | `make eval`                                          |
-| web lint / types / tests         | `make web-lint` · `make web-types` · `make web-test` |
-| run gateway only                 | `make dev-lite`                                      |
-| full local stack                 | `make dev`                                           |
-| start redis + postgres           | `make compose-up` · stop with `make compose-down`    |
+| Purpose                          | Command                                                           |
+| -------------------------------- | ----------------------------------------------------------------- |
+| install everything               | `make setup`                                                      |
+| download model weights (~552 MB) | `make models`                                                     |
+| **the gate**                     | `make check`                                                      |
+| fast inner loop (Python only)    | `make check-fast`                                                 |
+| lint / format check              | `make lint` · fix with `make fmt`                                 |
+| type check (mypy strict)         | `make types`                                                      |
+| tests with coverage              | `make test`                                                       |
+| memory regression tier           | `make memory`                                                     |
+| golden image set                 | `make eval`                                                       |
+| web lint / types / tests         | `make web-lint` · `make web-types` · `make web-test`              |
+| run gateway only                 | `make dev-lite`                                                   |
+| run the Celery worker            | `make worker`                                                     |
+| full local stack                 | `make dev`                                                        |
+| start redis + postgres           | `make compose-up` · stop with `make compose-down`                 |
+| apply / create a migration       | `make migrate` · `make migration NAME="..."`                      |
+| held-out benchmarks              | `make bench-grounding` · `make bench-removal` · `make bench-tune` |
 
-`make check` runs exactly what CI runs, in CI's order.
+`make check` runs exactly what CI runs, in CI's order — literally: each CI step invokes
+the corresponding Makefile target, so the two cannot drift.
 
 ## Operating rules
 

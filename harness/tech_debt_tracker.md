@@ -32,38 +32,50 @@ paid. It still stays visible.
 
 ## Register
 
-| ID     | Title                                                        | Status   | Priority | Area      |
-| ------ | ------------------------------------------------------------ | -------- | -------- | --------- |
-| TD-001 | CLIPSeg runs on torch, costing ~1 GB of overhead             | open     | P1       | models    |
-| TD-002 | Cast shadows survive object removal                          | accepted | P1       | models    |
-| TD-003 | Both erasers smear geometric structure                       | open     | P2       | models    |
-| TD-004 | Mask dilation bleeds into occluding foreground               | open     | P2       | models    |
-| TD-005 | Background op only handles flat backdrops                    | open     | P2       | models    |
-| TD-006 | Two of seven planned operations unimplemented                | accepted | P2       | models    |
-| TD-007 | Eval quality is not diffed against main in CI                | open     | P1       | evals     |
-| TD-008 | Add-mask plausibility is unchecked                           | open     | P2       | providers |
-| TD-009 | Visible transition artifact at the mask boundary             | open     | P2       | models    |
-| TD-010 | Upscaling is too slow to be interactive                      | accepted | P2       | models    |
-| TD-011 | Pass reporting conflated "not applicable" with "rolled back" | resolved | P1       | models    |
-| TD-012 | Grounding does not generalise beyond the dev set             | open     | P0       | models    |
-| TD-013 | Fill cost is a poor proxy for real quality                   | open     | P0       | core      |
-| TD-014 | Fine-tuning CLIPSeg is blocked on hardware                   | accepted | P1       | models    |
+| ID     | Title                                                        | Status   | Priority | Area       |
+| ------ | ------------------------------------------------------------ | -------- | -------- | ---------- |
+| TD-001 | CLIPSeg runs on torch, costing ~1 GB of overhead             | open     | P2       | models     |
+| TD-002 | Cast shadows survive object removal                          | accepted | P1       | models     |
+| TD-003 | Both erasers smear geometric structure                       | open     | P2       | models     |
+| TD-004 | Mask dilation bleeds into occluding foreground               | open     | P2       | models     |
+| TD-005 | Background op only handles flat backdrops                    | open     | P2       | models     |
+| TD-006 | Two of seven planned operations unimplemented                | accepted | P2       | models     |
+| TD-007 | Eval quality is not diffed against main in CI                | open     | P1       | evals      |
+| TD-008 | Add-mask plausibility is unchecked                           | open     | P2       | providers  |
+| TD-009 | Visible transition artifact at the mask boundary             | open     | P2       | models     |
+| TD-010 | Upscaling is too slow to be interactive                      | accepted | P2       | models     |
+| TD-011 | Pass reporting conflated "not applicable" with "rolled back" | resolved | P1       | models     |
+| TD-012 | Grounding does not generalise beyond the dev set             | open     | P1       | models     |
+| TD-013 | Fill cost's failure did not replicate on a second dataset    | open     | P2       | core       |
+| TD-017 | RemovalBench and RORD disagree about which eraser is better  | open     | P1       | benchmarks |
+| TD-018 | Authentication is unimplemented pending a product decision   | resolved | P1       | gateway    |
+| TD-019 | Any signed-in user can fetch any image by its digest         | open     | P2       | gateway    |
+| TD-014 | Fine-tuning CLIPSeg is blocked on hardware                   | accepted | P2       | models     |
+| TD-015 | Relational referring expressions are not grounded at all     | open     | P1       | models     |
+| TD-016 | Recorded result dimensions assume the edit preserves them    | open     | P2       | store      |
 
 ---
 
 ### TD-001 — CLIPSeg runs on torch, costing ~1 GB of overhead
 
-Status: open · Priority: P1 · Identified: 2026-08-25 · Area: `packages/models`
-**Problem:** text grounding uses a torch model where every other model is ONNX. Measured
-peak resident set is ~1188 MB for weights of ~150 MB.
-**Why it matters:** it is the single largest memory consumer on an 8 GB machine and the
-main reason the full pipeline approaches its ceiling.
-**Workaround:** the `text` extra is optional; the slot evicts aggressively.
-**Why deferred:** Phase 0 measured the easy path first, deliberately. Exporting is real
-work and the pipeline fit without it.
-**Trigger:** the worker budget is breached, or a second torch model is proposed.
-**Resolution:** export to ONNX int8 and re-measure. Expected to be the largest single
-saving available.
+Status: open · Priority: P2 · Identified: 2026-08-25 · Updated: 2026-08-27 · Area: `packages/models`
+**Problem:** text grounding used a torch model where every other model is ONNX. Measured
+peak resident set ~1188 MB for weights of ~150 MB.
+**Largely addressed on 2026-08-27.** ADR-0002 moved the default text lane to Grounding
+DINO, which is ONNX, so **nothing on the shipping path loads torch**. CLIPSeg remains
+behind the optional `text` extra as the fallback for "stuff" nouns — sky, grass, a wall —
+which an object detector grounds poorly, and `evals/run.py` still reaches it when the
+detector abstains.
+**Why it still matters:** a deployment that wants that fallback still pays ~1188 MB for
+it, and the `text` extra is still installed by default in the root project.
+**Workaround:** the detector answers first and abstains rarely (0 of 250 held-out
+phrases at the default gate), so the fallback is seldom reached in practice.
+**Why deferred:** it is no longer the binding memory constraint, and exporting CLIPSeg is
+real work with a smaller payoff than it had.
+**Trigger:** the worker budget is breached, or a "stuff" noun case enters the golden set
+and makes the fallback load-bearing.
+**Resolution:** export CLIPSeg to ONNX int8, or replace the fallback with a lightweight
+semantic segmenter and drop torch entirely.
 
 ### TD-002 — Cast shadows survive object removal
 
@@ -207,56 +219,153 @@ behavioural ones, because they corrupt every decision made from the report.
 
 ### TD-012 — Grounding does not generalise beyond the dev set
 
-Status: open · Priority: P0 · Identified: 2026-08-26 · Area: `packages/models`
-**Problem:** on our 18 hand-built cases, text-to-mask succeeds 10/11 (~91%). On 250
-held-out RefCOCOg samples it reaches **mIoU 0.389, precision@0.5 = 0.396**, with 36% of
-predictions below IoU 0.1.
-**Why it matters:** the dev-set number is the one quoted everywhere, and it is roughly
-double the held-out reality. Every downstream decision was made on the optimistic figure.
-**Measured:** `benchmarks/out/grounding.json`. By mask source: sam-refined 0.469 (n=185),
-clipseg-seed 0.234 (n=45), no match at all 0.0 (n=20, 8% of phrases). By phrase length:
-≤5 words 0.469, >5 words 0.367.
+Status: open · Priority: P1 · Identified: 2026-08-26 · Updated: 2026-08-27 · Area: `packages/models`
+**Problem:** on our 18 hand-built cases, text-to-mask succeeded 10/11 (~91%). On 250
+held-out RefCOCOg samples it reached **mIoU 0.389, precision@0.5 = 0.396**, with 36% of
+predictions below IoU 0.1 — roughly half the dev-set figure that was being quoted.
+**Improved on 2026-08-27, not closed.** ADR-0002 replaced CLIPSeg with Grounding DINO on
+the same 250 samples:
+
+|                          | CLIPSeg | Grounding DINO |
+| ------------------------ | ------: | -------------: |
+| mIoU                     |  0.3893 |     **0.4694** |
+| median IoU               |  0.3348 |     **0.5411** |
+| precision@0.5            |   0.396 |      **0.516** |
+| phrases matching nothing |      20 |          **0** |
+
+**Why it still matters:** 0.469 is better but it is not good. Published trained RES models
+reach 0.65-0.75 on this benchmark, and **the failure rate below IoU 0.1 did not move at
+all** (0.360 both ways) — the gain is entirely in cases that were already partly right.
+**Measured:** `benchmarks/out/grounding-detector.json` and `-clipseg.json`.
 **Workaround:** the brush is always available, and the product's own prompts are simpler
 than RefCOCOg's relational expressions.
-**Why deferred:** the fix is a better grounding model, not a threshold. Sweeping the
-confidence gate over its whole range moves mIoU by 2.5 points (0.375 to 0.401), so no
-tuning available to us closes this.
+**Why deferred:** what remains is not a threshold problem. Both gates were swept on a fit
+split and reported on a holdout (ADR-0002): `min_sam_iou` moves the holdout score by
+0.0006 across its whole useful range, so the fitted value was **not written**.
 **Trigger:** any claim about grounding accuracy made outside the dev set.
-**Resolution:** see TD-014. A trained referring-expression segmentation model reaches
-mIoU 0.65-0.75 on this benchmark; zero-shot CLIPSeg plus SAM is simply a weaker approach.
+**Resolution:** the residual failure is relational reasoning, split out as TD-015.
 
-### TD-013 — Fill cost is a poor proxy for real quality
+### TD-013 — Fill cost's failure did not replicate on a second dataset
 
-Status: open · Priority: P0 · Identified: 2026-08-26 · Area: `packages/core`
-**Problem:** `fill_metrics(...).cost` measures **plausibility** — how well a fill agrees
-with the pixels around it — and we have been using it as a stand-in for **fidelity**, how
-close the fill is to what was actually behind the object. Those are different properties,
-and on paired data the assumption that one implies the other fails.
+Status: open · Priority: P2 (was P0) · Identified: 2026-08-26 · Updated: 2026-08-27 · Area: `packages/core`
 
-**Measured, n=138 individual fills with paired ground truth:** Spearman correlation
-between cost and SSIM-against-truth is **+0.128**. Cost is lower-is-better and SSIM is
-higher-is-better, so a proxy that worked would correlate _negatively_. Choosing by cost
-picks the better eraser in 43.5% of cases; always choosing LaMa picks it in 75.4%.
-**Why it matters:** this metric drives the router, the multi-pass keep-or-rollback
-decision, and the `cost` column in the eval table. The routing built on it is worse than
-doing nothing — routed SSIM 0.5630 against always-LaMa 0.5791 — and the same doubt now
-attaches to every decision made from it.
+**The original finding.** `fill_metrics(...).cost` measures **plausibility** — how well a
+fill agrees with the pixels around it — and it was being used as a stand-in for
+**fidelity**, how close the fill is to what was actually behind the object. On
+RemovalBench (n=69, 138 fills) the Spearman correlation between cost and
+SSIM-against-truth was **+0.128**; cost is lower-is-better and SSIM higher-is-better, so a
+working proxy correlates _negatively_. Choosing by cost picked the better eraser 43.5% of
+the time against always-LaMa's 75.4%. The recorded conclusion was that the routing built
+on it is worse than doing nothing, and the recorded resolution was to **confirm on a
+second paired dataset before acting**.
 
-The metric is not _wrong_; it measures what it says it measures. The error was ours, in
-treating a plausibility score as a quality score without ever checking the correlation.
-**Measured:** `benchmarks/out/removal.json`, n=69 RemovalBench samples with paired GT.
-**Workaround:** none in place.
-**Why deferred:** the replacement is not obvious. A learned chooser was built and
-**rejected** — it beat the majority baseline on accuracy (+0.058) and not on SSIM
-(-0.0001), because the entire choice is worth at most +0.0045 SSIM.
-**Trigger:** before any further investment in routing logic.
-**Resolution:** the evidence points at _simplifying_: use one eraser for removal and
-delete the cost-based escalation. Confirm on a second paired dataset first — this is one
-benchmark, and our own dev set disagrees with it.
+**2026-08-27: the second dataset was run, and it refuted the conclusion.**
 
-### TD-014 — Fine-tuning CLIPSeg is blocked on hardware
+|                                | RemovalBench (n=69) | RORD-50 (n=69) |
+| ------------------------------ | ------------------: | -------------: |
+| Spearman `cost` vs SSIM        |          **+0.128** |     **−0.519** |
+| Spearman `semantic` vs SSIM    |              −0.146 |     **+0.415** |
+| `cost` picks the better eraser |               43.5% |      **68.1%** |
+| always-majority                |        75.4% (LaMa) | 50.7% (MI-GAN) |
+| MI-GAN wins / LaMa wins        |             17 / 52 |        35 / 34 |
+| mean SSIM of the better eraser |               0.584 |          0.837 |
 
-Status: accepted · Priority: P1 · Identified: 2026-08-26 · Area: `packages/models`
+On RORD, cost correlates at **−0.519** — the correct sign, and the same magnitude the
+ReMOVE paper reports for its own metric against LPIPS (−0.515). It beats always-MI-GAN by
+17 points at picking the winner. **The metric works there.**
+
+**Why it is now a P2 and not a P0.** The claim "cost is a poor proxy" rests entirely on
+RemovalBench, and it does not generalise — which is the exact mistake the original entry
+was written to warn about, made one level up. `compare()` and the multi-pass rollback
+rule are not known to be broken, so the change that was queued behind this — deleting the
+router and shipping one eraser — is **not justified** and has not been made.
+
+**What is actually established:** the two datasets disagree, both about the metric and
+about which eraser is better at all. Split out as **TD-017**, because "which of our two
+benchmarks is unrepresentative" is a different question from "is this metric valid".
+
+**Workaround:** none needed. The router is unchanged and every threshold now loads from
+`benchmarks/fitted_thresholds.json` rather than a literal.
+**Trigger:** a third paired dataset, or any decision that would rest on cost alone
+without checking `benchmarks/out/removal.json` first.
+**Resolution:** a third dataset breaks the tie. Until then, treat cost as valid for
+comparing fills of the same mask — which is all it ever claimed — and not as a quality
+score.
+
+**A candidate replacement was measured and rejected.** `editgpt_models.semantic`
+implements ReMOVE off the MobileSAM encoder we already load. It **flips sign between the
+same two datasets** (−0.146 / +0.415), picks the winner 52.2% / 44.9%, and loses to cost
+on RORD where the signal is strongest — while costing a full encoder pass per candidate.
+It is not wired into the router. The module is kept because `benchmarks/removal.py` still
+reports it, so the next person can re-measure instead of re-implementing.
+
+### TD-017 — RemovalBench and RORD disagree about which eraser is better
+
+Status: open · Priority: P1 · Identified: 2026-08-27 · Area: `benchmarks`
+**Problem:** our two paired datasets do not agree on anything that matters. RemovalBench
+says LaMa wins 52 of 69; RORD says the two are level at 35/34. Both reference-free proxies
+correlate with ground truth on RORD and anti-correlate on RemovalBench.
+**Why it matters:** every routing decision, and the honesty of TD-013, depends on which
+one describes the images users will send. Right now we do not know, and a conclusion drawn
+from either alone has a 50% chance of being an artefact — which has already happened once.
+**Measured:** `benchmarks/out/removal.json`. Note the absolute scale as well: mean SSIM of
+the better eraser is 0.584 on RemovalBench against 0.837 on RORD.
+**Leading hypothesis, not established:** RemovalBench is a curated _hard_ set — large
+objects, difficult backgrounds — where every fill is poor, so no reference-free score can
+rank fills that are all wrong, and the "better" eraser is nearly a constant. RORD's
+removals are mostly small handheld-video objects where fills are genuinely close and the
+ordering carries signal. If that is right, RORD is the better guide for ordinary photos
+and RemovalBench for the hard tail, and both should be reported rather than averaged.
+**Workaround:** `make bench-removal` runs both and prints them side by side, so no
+conclusion can be drawn from one without seeing the other.
+**Why deferred:** resolving it needs a third dataset, and the decision it would unblock is
+worth at most +0.013 SSIM (the oracle's gain over always-picking-one).
+**Trigger:** any further investment in routing, or a third paired dataset becoming
+available.
+**Resolution:** add a third paired set, and stratify all three by mask coverage — if the
+hypothesis holds, the correlation should track difficulty rather than dataset identity.
+
+### TD-018 — Authentication is unimplemented pending a product decision
+
+Status: resolved · Priority: P1 · Identified: 2026-08-27 · Resolved: 2026-08-27 · Area: `apps/gateway`
+**Problem:** every request resolved to a single shared anonymous user.
+**Resolution:** v1 has accounts, so Clerk was integrated. `auth.current_identity` verifies
+the session token through `clerk-backend-api`, provisions a `users` row on first sight
+keyed by Clerk's subject, and returns the owner every route passes to the store. It
+**fails closed** — an absent, expired or malformed token is a 401, never a fall back — and
+accepts only `session_token`. `EDITGPT_CLERK_JWT_KEY` makes verification networkless.
+Authentication is on when the secret key is present and off otherwise, so tests and a
+fresh checkout need no credential; `/ready` reports which mode is live.
+**Kept here as a record:** the _authorization_ half was built a step earlier, before any
+provider was chosen — one place deciding identity, every route passing it explicitly, the
+owner travelling in the queue message. That is why adding the provider touched one
+function and no routes. Doing it in that order is the reusable part.
+
+### TD-019 — Any signed-in user can fetch any image by its digest
+
+Status: open · Priority: P2 · Identified: 2026-08-27 · Area: `apps/gateway`
+**Problem:** `GET /v1/images/{digest}` requires a session but does not check ownership, so
+any signed-in user holding a digest can fetch that image.
+**Why it matters:** a digest is a 256-bit unguessable name, so this is not open to the
+internet — but digests do leak, into logs, screenshots and shared links, and "unguessable"
+is a weaker promise than "not yours".
+**Why it is not simply an ownership check:** storage is content-addressed. Two users
+uploading the same photograph share one digest and one `images` row, whose `user_id` is
+whoever arrived first. An ownership check would lock the second uploader out of their own
+upload, which is worse than the exposure.
+**Workaround:** authentication is required, so the audience is signed-in users rather than
+anyone.
+**Why deferred:** the correct fix is a schema change, and the exposure needs both an
+account and a leaked digest.
+**Trigger:** the service being used by people who do not know each other.
+**Resolution:** a `user_images` join table so many owners can share one blob, then check
+membership. Signed, expiring URLs (already planned for Phase 9) are the complement — they
+also let `<img src>` work without a header, which the frontend currently works around by
+fetching to a blob.
+
+### TD-014 —### TD-014 — Fine-tuning CLIPSeg is blocked on hardware
+
+Status: accepted · Priority: P2 · Identified: 2026-08-26 · Area: `packages/models`
 **Problem:** grounding is the largest quality bottleneck (TD-012) and the obvious remedy
 is fine-tuning CLIPSeg on RefCOCOg, or replacing it with a trained referring-expression
 segmentation model.

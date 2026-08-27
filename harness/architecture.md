@@ -38,9 +38,10 @@ image + (brush | box | text)
         │            rejects unactionable work at construction
         ▼
    GROUNDING                                  packages/models/segment.py
-        │  text ─► CLIPSeg heatmap ─► seed
-        │  seed | box | brush ─► MobileSAM ─► mask + its own confidence
-        │  refinement kept only if that confidence clears the gate
+        │  text ─► Grounding DINO ─► best box       (mIoU 0.469 held out)
+        │  box | brush | seed ─► MobileSAM ─► mask + its own confidence
+        │  below the gate the detector's box is kept as a filled rectangle
+        │  CLIPSeg remains as a seed source for "stuff" nouns; see ADR-0002
         ▼
    MASK PREP        dilate by 5% of the object's longest side, never a pixel constant
         ▼
@@ -59,6 +60,7 @@ image + (brush | box | text)
    COMPOSITE        chroma-only match, feathered paste-back at full resolution
         ▼
    SCORE            fill cost + mask-growth penalty. Never cost alone.
+                    Every threshold is read from `config.Thresholds`, never a literal.
 ```
 
 ## Implemented vs planned
@@ -71,9 +73,9 @@ Stating this honestly is the point of the section.
 | Router     | a function in `pipeline.py`          | an agent behind A2A                         |
 | Multi-pass | automatic, capped at 3               | user-triggered "needs more work"            |
 | Critic     | scoring inline                       | an agent with a retry budget                |
-| Transport  | direct function calls                | A2A JSON-RPC + SSE between processes        |
-| Storage    | local files                          | object storage, content-addressed           |
-| Jobs       | none                                 | queue + worker + progress stream            |
+| Transport  | HTTP + Celery over Redis             | A2A JSON-RPC + SSE between processes        |
+| Storage    | content-addressed, local disk or S3  | a hosted S3 endpoint, chosen at deploy time |
+| Jobs       | queue, worker, SSE progress          | critic-driven retries within a job          |
 
 **There is no agent mesh yet.** The pipeline is a library. Splitting it into processes
 changes deployment, not shape — which is what `EditSpec` is for.
@@ -81,15 +83,16 @@ changes deployment, not shape — which is what `EditSpec` is for.
 ## Models
 
 Keys are registry keys (`packages/models/src/editgpt_models/registry.py`), where the measured
-peak resident set for each lives. `make models` fetches all of them (~348 MB).
+peak resident set for each lives. `make models` fetches all of them (~552 MB).
 
-| Key                           | Model          | Role                                           |    Disk |
-| ----------------------------- | -------------- | ---------------------------------------------- | ------: |
-| `sam-encoder` / `sam-decoder` | MobileSAM      | box, point or seed to a precise mask           |   44 MB |
-| —                             | CLIPSeg-rd64   | free text to a coarse seed (torch; see TD-001) | ~150 MB |
-| `migan`                       | MI-GAN         | primary eraser, fast path                      |   28 MB |
-| `lama`                        | Big-LaMa       | escalation eraser                              |  208 MB |
-| `esrgan-x2`                   | Real-ESRGAN x2 | tiled resolution enhancement                   |   67 MB |
+| Key                           | Model            | Role                                           |    Disk |
+| ----------------------------- | ---------------- | ---------------------------------------------- | ------: |
+| `sam-encoder` / `sam-decoder` | MobileSAM        | box, point or seed to a precise mask           |   44 MB |
+| `grounding-dino`              | G-DINO tiny int8 | phrase to candidate boxes — the text lane      |  204 MB |
+| —                             | CLIPSeg-rd64     | fallback text seed for "stuff" (torch; TD-001) | ~150 MB |
+| `migan`                       | MI-GAN           | primary eraser, fast path                      |   28 MB |
+| `lama`                        | Big-LaMa         | escalation eraser                              |  208 MB |
+| `esrgan-x2`                   | Real-ESRGAN x2   | tiled resolution enhancement                   |   67 MB |
 
 | — | SD-1.5-inpainting | additions and replacements (remote) | — |
 
@@ -99,13 +102,13 @@ router picks by measurement rather than by preference.
 
 ## Data stores
 
-| Store             | Responsibility                                             | Status                        |
-| ----------------- | ---------------------------------------------------------- | ----------------------------- |
-| Object storage    | uploaded images and artifacts, content-addressed by digest | planned                       |
-| Postgres          | users, images, jobs, job steps, artifacts, cost ledger     | container runs; no schema yet |
-| Redis             | job queue and progress channel                             | container runs; unused        |
-| Local model cache | ONNX weights, `~/.cache/editgpt/models` (~348 MB)          | live                          |
-| `evals/photos`    | golden fixtures, committed                                 | live                          |
+| Store             | Responsibility                                             | Status                                                          |
+| ----------------- | ---------------------------------------------------------- | --------------------------------------------------------------- |
+| Object storage    | uploaded images and artifacts, content-addressed by digest | live: local disk by default, any S3 endpoint via the `s3` extra |
+| Postgres          | users, images, jobs, job steps, artifacts, cost ledger     | live; Alembic in `packages/store/migrations`                    |
+| Redis             | Celery broker and the per-job progress channel             | live                                                            |
+| Local model cache | ONNX weights, `~/.cache/editgpt/models` (~552 MB)          | live                                                            |
+| `evals/photos`    | golden fixtures, committed                                 | live                                                            |
 
 ## External integrations
 
@@ -136,7 +139,16 @@ No credential values appear in this repository. Names of required variables are 
   concatenated into a system instruction.
 - **Object keys are content digests**, not user-supplied paths, so path traversal is
   structurally impossible rather than filtered.
-- Authentication and authorization are not implemented. Do not assume they are.
+- **Authentication is Clerk, and it fails closed.** `editgpt_gateway.auth` verifies the
+  session token, provisions a `users` row keyed by Clerk's subject, and returns the owner
+  every route passes to the store. An absent, expired or malformed token is a 401 — never
+  a fall back to the shared account. Only `session_token` is accepted. It is off when no
+  secret key is configured, which is how tests run; `/ready` reports which mode is live.
+- **Authorization is a filter, not a check.** The store selects by owner, so an
+  unauthorised read returns 404 rather than 403 — a 403 confirms the id exists.
+- **Object storage is vendor-neutral.** The adapter speaks the S3 API and takes its
+  endpoint from configuration, which is what lets MinIO in a container serve as the
+  verified implementation. No provider is baked in.
 
 ## Architectural invariants
 

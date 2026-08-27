@@ -29,6 +29,15 @@ Where components interact in ways unit tests cannot reach: a pipeline across mod
 provider chain with failover, a request through the gateway. Use stubs at the network
 boundary, real objects everywhere inside it.
 
+**A test that spans two apps lives in `tests/`, not beside either of them.** The gateway
+and the worker do not depend on each other, deliberately — the web tier must never pull
+in the worker's model stack — and a test placed in either directory would quietly create
+that dependency. Everything one package can prove alone stays next to that package.
+
+Replace the _transport_, never the logic. The end-to-end test runs the real FastAPI app,
+the real repository and the real Celery task function, with an in-process queue and an
+in-memory Redis. Stubbing the task instead would have produced a test of the stub.
+
 ## End-to-end and acceptance
 
 For user-facing behaviour, verify the actual workflow, not its parts. For this project
@@ -79,11 +88,32 @@ confirms them. In this project a photometric score picked the visually worse ima
 separate times — see `docs/EVALUATION.md`, which is authoritative on which metrics are
 valid here and why several common ones are not.
 
+**A metric is not validated until it holds on a second dataset.** The proxy that drove
+the router was adopted on one benchmark and turned out to correlate the wrong way. Before
+any score is allowed to make a decision, report its correlation with ground truth on two
+independent sets — a correlation that appears on one and not the other is a property of
+that dataset, not of the metric.
+
+**When a fitted value loses to the default, do not ship it.** `benchmarks/tune.py` has
+declined to write one twice, and both refusals were the correct result. A tuner that
+always writes something is a tuner that launders overfitting into a config file.
+
 ## Determinism
 
 Seed every RNG. Freeze time. No wall-clock dependence except explicit sleeps in
 lifetime tests. A flaky test is worse than no test: it teaches people to re-run instead
 of read.
+
+**And no dependence on the developer's machine.** A run must give the same answer on a
+laptop with every credential configured, on a fresh checkout with none, and in CI. The
+root `conftest.py` enforces that by unhooking `.env` from the settings classes and
+clearing credential variables before collection.
+
+That rule was bought: `Settings` reads `.env`, which is right for the application and
+wrong for tests, and it did no harm for as long as no setting changed behaviour. The day
+real Clerk keys were added, twenty tests expecting unauthenticated mode began returning 401. Nothing was broken — the suite had been reading the machine all along, and the
+machine had only just acquired an opinion. **A test that needs a credential sets it
+itself.**
 
 ## No network
 
@@ -92,12 +122,31 @@ network is marked `live` and runs nightly.
 
 ## Markers
 
-| Marker   | Meaning                       | In `make check`?   |
-| -------- | ----------------------------- | ------------------ |
-| _(none)_ | fast, hermetic                | yes                |
-| `slow`   | more than a few seconds       | no                 |
-| `memory` | asserts peak RSS, own process | no — `make memory` |
-| `live`   | real network                  | no — nightly       |
+| Marker    | Meaning                                         | In `make check`?   |
+| --------- | ----------------------------------------------- | ------------------ |
+| _(none)_  | fast, hermetic                                  | yes                |
+| `service` | needs a live Postgres or MinIO; skips otherwise | yes, when it is up |
+| `slow`    | more than a few seconds                         | no                 |
+| `memory`  | asserts peak RSS, own process                   | no — `make memory` |
+| `live`    | real network                                    | no — nightly       |
+
+`service` is in the default tier on purpose, and it earns the exception to "no network".
+Two things forced it, both the same shape:
+
+- The initial migration was generated against SQLite, reviewed, merged and never applied.
+  Its first real run failed because Postgres rejected an untyped bind for a `uuid` column,
+  while every SQLite test stayed green throughout. **A migration is not verified by
+  review, only by applying it and rolling it back on the dialect it will meet.**
+- `S3AssetStore` was covered entirely by a hand-written stub, which proves the arithmetic
+  around the calls and nothing about the calls. **A stub cannot tell you which exception
+  the real client raises**, and the caller's `except` is built on that answer.
+
+These skip cleanly with no containers, so a fresh checkout stays green, and CI runs the
+services so they genuinely execute. `make compose-up` and `make compose-s3` locally.
+
+Each test builds a throwaway database or bucket. Never point a test that drops everything
+at one somebody is using, and never share one between tests that delete — two parallel
+runs will delete each other's.
 
 Resource assertions run **over repeated iterations**. Measured resource use varies
 run-to-run; a single sample once set a ceiling 20% too low.

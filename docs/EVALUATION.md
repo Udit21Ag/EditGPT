@@ -18,8 +18,12 @@ separate times:
    failure when the image plainly showed it working.
 
 The mitigations are in `editgpt_core.metrics`: `compare()` scores both candidates over
-one fixed region and charges `GROWTH_PENALTY` per unit of area erased beyond the base
+one fixed region and charges a growth penalty per unit of area erased beyond the base
 mask. Use `compare()`, not raw `.cost`, whenever masks differ.
+
+The penalty is a **parameter**, not a constant: `editgpt_models.config.Thresholds` owns
+the fitted value and passes it in. `core` cannot read that file — it imports nothing of
+ours — so the module-level number is a documented default and nothing more.
 
 ## Layers of measurement
 
@@ -35,7 +39,10 @@ comparison available without painted ground truth.
 - Precision alone is invalid: a six-pixel mask in the right place scores `inside_frac`
   1.000 and is useless. That passed a rescore while the object was still visibly present.
 
-Current: CLIPSeg localises **10/11**; after MobileSAM refinement, also 10/11.
+Current on the dev set: **10/11**. Treat that number with suspicion — the held-out
+figure is roughly half it, and the gap is the entire subject of
+[GENERALISATION.md](GENERALISATION.md). Report the held-out mIoU alongside it or not at
+all.
 
 ### 2. Fill quality — does the result agree with its surroundings?
 
@@ -69,6 +76,23 @@ So cost is valid for what it claims: comparing two fills of the same mask for lo
 consistency. It is **not** valid as a stand-in for quality, and using it to choose between
 erasers performs worse than choosing one and never changing (43.5% against 75.4%). See
 TD-013.
+
+### The candidate replacement, and how to judge it
+
+`editgpt_models.semantic.consistency` implements ReMOVE (arXiv:2409.00707): mean
+segmentation-ViT patch embeddings inside the erased region against those outside it,
+compared by cosine similarity. **Higher is better**, the opposite direction to `cost`.
+
+It costs one extra forward pass of an encoder the pipeline already loads for every box or
+text prompt, so it is close to free — but *cheap is not the same as valid*. Two
+substitutions from the paper are unproven here: MobileSAM's TinyViT is not SAM's ViT-H,
+and the region crop is ours. Whether it survives them is answered by
+`make bench-removal`, which reports the Spearman correlation of **both** proxies against
+SSIM-vs-ground-truth on **two** independent paired datasets.
+
+**Do not adopt a proxy on one dataset.** That is precisely how `cost` came to drive the
+router. A correlation that appears on RemovalBench and not on RORD is a property of
+RemovalBench.
 
 ## What we can and cannot measure
 

@@ -141,12 +141,12 @@ class EditSpec(BaseModel):
     content: str | None           # "a moustache"  (for ADD/REPLACE)
     mask_source: Literal["text", "brush", "point", "auto", "whole"]
     mask_ref: MaskRef | None      # RLE-encoded, by reference — never inline pixels
-    image_ref: AssetRef           # r2://bucket/sha256  — images ALWAYS by reference
+    image_ref: AssetRef           # asset://bucket/sha256 — images ALWAYS by reference
     constraints: Constraints      # preserve_identity, max_seconds, max_cost_cents, nsfw_policy
     confidence: float
 ```
 
-**Images never enter the agent conversation.** Agents exchange `AssetRef` (content-addressed R2 key) + RLE masks +
+**Images never enter the agent conversation.** Agents exchange `AssetRef` (a content digest) + RLE masks +
 a 256px thumbnail when a model genuinely needs to look. This one rule cuts token cost ~100× and keeps peak RSS flat.
 
 ### 1.3 Pipelines per operation
@@ -269,7 +269,7 @@ EditGPT/
 ├── packages/
 │   ├── core/                    # EditSpec, AssetRef, MaskRef, errors, tracing
 │   ├── models/                  # ModelSlot, ONNX wrappers, download+quantise scripts
-│   └── storage/                 # R2 client, content-addressing, signed URLs
+│   └── storage/                 # S3 client, content-addressing, signed URLs
 ├── evals/                       # golden images, prompts, scorers, regression report
 ├── infra/                       # compose, Dockerfiles, fly/HF-Space configs
 └── docs/                        # PLAN.md, ADRs, API.md, RUNBOOK.md
@@ -349,22 +349,48 @@ own ground truth answer that instead.
 **Exit:** a fresh session, given only `AGENTS.md`, can find its way to the right rules, make
 a change, and verify it — with no human hand-holding.
 
-### Phase 3 — Contracts & job pipeline (4–5 days)
+### Phase 3 — Contracts & job pipeline (4–5 days) · ✅ **COMPLETE** — 27 Aug 2026
 
-Clerk auth on the gateway · R2 content-addressed upload with signed URLs + MIME/size/dimension validation ·
+Content-addressed upload with MIME/size/dimension validation at the gateway (the only input
+boundary) · `packages/store`: asset store behind a protocol with local and S3 adapters ·
 Postgres schema (`users, images, jobs, job_steps, artifacts, cost_ledger`) + Alembic ·
-Celery job lifecycle `queued→planning→running→review→done|failed|cancelled` · SSE progress stream ·
-idempotency keys · per-user rate limits and quota. **No AI yet** — a `noop_edit` task proves the whole pipe end-to-end.
+`apps/worker`: Celery lifecycle `queued→planning→running→review→done|failed|cancelled` ·
+SSE progress stream that replays persisted steps then follows Redis · idempotency keys ·
+per-client rate limits · cost ledger that records free calls too. **No AI** — a `noop`
+editor proves the pipe end-to-end.
 
-**Exit:** upload → job → SSE progress → result URL, fully tested, with a stub editor.
+**Exit met:** upload → job → SSE progress → result digest, with a stub editor, under test.
 
-### Phase 4 — Perception layer (5–6 days)
+**Two departures from the plan as written, both deliberate.**
 
-`ModelSlot` + RSS watchdog (with its memory test) · MobileSAM (brush/point/box → mask) · CLIPSeg (text → mask) ·
-mask ops: dilate, feather, RLE encode/decode, bbox, area-sanity · `mask_from_text` ambiguity detection →
-returns candidates for the UI to disambiguate · vision_tools MCP server with tiered disclosure.
+*Object storage is not R2.* R2 asks for payment details even on its free tier. The adapter
+now speaks the S3 API with the endpoint as configuration, so no vendor is baked in — and
+**MinIO in a container is the verified implementation**, which needs no account at all and
+is what the test suite and CI run against. Picking a hosted provider is a Phase 10
+decision; `docs/RUNBOOK.md` lists which ones do not ask for a card.
 
-**Exit:** `mask_from_text("the car")` beats 0.7 IoU on the eval subset; RSS test green.
+*Clerk arrived after the fact, and cheaply.* The authorization half was built first —
+identity decided in one place, every route passing it, the owner travelling in the queue
+message — so wiring the provider touched **one function and no routes**. It fails closed,
+provisions users on first request, and is off when no key is configured so tests and a
+fresh checkout need no credential. See TD-018.
+
+### Phase 4 — Perception layer (5–6 days) · partly delivered early
+
+`ModelSlot` + RSS watchdog, MobileSAM, mask ops and the multi-pass policy all shipped in
+Phase 0/1. Text grounding moved to Grounding DINO on 27 Aug 2026 —
+[ADR-0002](adr/0002-text-grounding.md) — taking held-out RefCOCOg mIoU from 0.389 to 0.469
+and removing torch from the shipping path.
+
+What is left is the part that actually matters now: **ambiguity detection returning
+candidates for the UI to disambiguate**. TD-015 measured that 36% of held-out phrases fail
+below IoU 0.1 and that the figure is identical for both grounding models, because both
+ground the noun and then pick an arbitrary instance. `detect()` already ranks every box;
+surfacing the top few turns a wrong edit into one extra click. Plus the vision_tools MCP
+server with tiered disclosure.
+
+**Exit:** a relational phrase returns candidates rather than a confident wrong mask; RSS
+test green with the detector in the slot.
 
 ### Phase 5 — Editing layer (5–6 days)
 
