@@ -24,7 +24,7 @@ def test_asset_ref_rejects_a_non_digest() -> None:
 
 def test_asset_ref_exposes_uri_and_size() -> None:
     ref = image(2000, 1000)
-    assert ref.uri == f"r2://edits/{DIGEST}"
+    assert ref.uri == f"asset://edits/{DIGEST}"
     assert ref.megapixels == pytest.approx(2.0)
 
 

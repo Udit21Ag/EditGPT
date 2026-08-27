@@ -58,7 +58,14 @@ class AssetRef(BaseModel):
 
     @property
     def uri(self) -> str:
-        return f"r2://{self.bucket}/{self.sha256}"
+        """A stable, vendor-neutral name for this asset.
+
+        `asset://` rather than a provider's scheme: the same digest is the same asset
+        whether it lives on local disk, in MinIO or behind a hosted endpoint, and a
+        reference that names the storage backend stops being true when the backend
+        changes.
+        """
+        return f"asset://{self.bucket}/{self.sha256}"
 
     @property
     def megapixels(self) -> float:

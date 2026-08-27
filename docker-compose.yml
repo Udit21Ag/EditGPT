@@ -1,5 +1,10 @@
-# Local dependencies only. The gateway and worker run on the host during development so
-# a model benchmark and the stack do not contend for the same 8 GB.
+# Local dependencies only. The gateway and worker run **on the host** during development,
+# started with `make dev-lite` and `make worker`.
+#
+# That is deliberate and not laziness. A containerised worker would hold its models inside
+# the VM's memory allocation, so a benchmark on the host and the stack would compete for
+# the same 8 GB from two sides of a boundary neither can see across. Running the heavy
+# processes on the host keeps one memory budget instead of two.
 #
 # Use OrbStack or colima rather than Docker Desktop: it is worth about 1.5 GB of RAM,
 # which on this machine is the difference between a pipeline fitting and not.
@@ -28,5 +33,32 @@ services:
       timeout: 3s
       retries: 5
 
+  # S3-compatible object storage, locally, with no account and no payment details.
+  #
+  # It is here for two reasons. It removes the last thing that needed a hosted signup to
+  # develop against, and — more usefully — it makes `S3AssetStore` a *tested* adapter
+  # rather than one that only ever met a stub. Every hosted provider this could point at
+  # speaks the same API, so what passes here is what will run there.
+  #
+  # Behind a profile because the local filesystem is the default and most work does not
+  # need this: `docker compose --profile s3 up -d minio`, or `make compose-s3`.
+  minio:
+    image: minio/minio:latest
+    profiles: ["s3"]
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      # Development credentials, deliberately in the open. They reach nothing but a
+      # container on this machine; a real endpoint's keys belong in .env and nowhere else.
+      MINIO_ROOT_USER: editgpt
+      MINIO_ROOT_PASSWORD: editgpt-dev-secret
+    ports: ["9000:9000", "9001:9001"]
+    volumes: ["miniodata:/data"]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 volumes:
   pgdata:
+  miniodata:
