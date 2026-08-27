@@ -96,12 +96,17 @@ class Edit:
     critic loop needs, not noise to discard."""
 
 
-def remove(models: Models, image: RGB, mask: Mask) -> Edit:
+def remove(models: Models, image: RGB, mask: Mask, *, protect: Mask | None = None) -> Edit:
     """Erase the masked region, multi-pass, keeping only what verifies better.
 
     The mask is grown first by a fraction of the *object's* longest side. A pixel constant
     that works at 1024 px leaves a visible rectangular outline at 15.9 MP; this is one of
     the two Phase 0 fixes that must not be re-derived.
+
+    `protect` is where that growth must stop: regions belonging to whatever is standing in
+    front of, or up against, the target. It arrives from the caller rather than being
+    computed here because finding it needs the SAM sessions, and this module dispatches
+    rather than segments. `segment.occluder_shield` produces it.
     """
     models.require("migan", "lama")
 
@@ -115,7 +120,7 @@ def remove(models: Models, image: RGB, mask: Mask) -> Edit:
             "which an edit could be visible; select a larger area"
         )
 
-    grown = prepare_mask(mask)
+    grown = prepare_mask(mask, protect=protect)
     started = time.monotonic()
     outcome = erase(Erasers.from_sessions(models.migan, models.lama), image, grown)
     return Edit(
@@ -238,6 +243,7 @@ def execute(
     image: RGB,
     *,
     mask: Mask | None = None,
+    protect: Mask | None = None,
     content: str | None = None,
     colour: tuple[int, int, int] = (0, 255, 0),
     via: str = "remote",
@@ -246,7 +252,9 @@ def execute(
 
     `mask` is required by everything except `UPSCALE`, which acts on the whole frame.
     `content` describes what to paint for the generative operations, and `via` names the
-    provider that served them so the audit trail records which one did.
+    provider that served them so the audit trail records which one did. `protect` is
+    honoured by `REMOVE` alone — the generative lane paints into the hole rather than
+    continuing the background, so withholding part of that hole leaves a seam.
     """
     if op not in SUPPORTED:
         available = sorted(o.value for o in SUPPORTED)
@@ -264,7 +272,7 @@ def execute(
         raise MaskTooSmallError(f"{op} needs a region to act on and none was given")
 
     if op is EditOp.REMOVE:
-        return remove(models, image, mask)
+        return remove(models, image, mask, protect=protect)
 
     # ADD and REPLACE. Both need something to put there; `EditSpec` already refuses a
     # generative op with no content, so reaching here without it is a caller bug.

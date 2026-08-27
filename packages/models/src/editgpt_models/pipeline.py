@@ -296,6 +296,24 @@ def erase(
     return EraseOutcome(image=best, mask=best_mask, passes=passes)
 
 
-def prepare_mask(mask: Mask, *, thresholds: Thresholds | None = None) -> Mask:
-    """Grow a raw segmentation by the object-relative slack the erasers need."""
-    return grow(mask, frac=(thresholds or load_thresholds()).dilate_frac)
+def prepare_mask(
+    mask: Mask, *, protect: Mask | None = None, thresholds: Thresholds | None = None
+) -> Mask:
+    """Grow a raw segmentation by the object-relative slack the erasers need.
+
+    `protect` is withheld from the result *after* growing, which is the only order that
+    works: the shield's whole purpose is to stop dilation reaching a neighbour, so
+    subtracting it before the dilation runs would let the growth walk straight back in.
+
+    It can only withhold what dilation *added*. The region the user selected is erased
+    whatever a shield says, because the alternative failure — the subject left standing
+    in the result — is worse than the bleed shielding prevents, and far harder to explain.
+    `occluder_shield` already keeps a margin clear of the selection, but this does not
+    rely on that: the guarantee belongs where the subtraction happens rather than in the
+    good behaviour of whoever produced the mask.
+    """
+    grown = grow(mask, frac=(thresholds or load_thresholds()).dilate_frac)
+    if protect is None:
+        return grown
+    added = mask == 0
+    return np.asarray(np.where((protect > 0) & added, 0, grown), dtype=np.uint8)

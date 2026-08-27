@@ -65,6 +65,52 @@ class Thresholds:
     dilate_frac: float = 0.05
     """Mask dilation as a fraction of the object's longest side."""
 
+    shield: bool = False
+    """Whether to withhold neighbouring objects from an erase mask's dilation.
+
+    **Measured on the golden set and not adopted.** It does what it claims — the jumper's
+    shoe in `i8` goes from 10.3% erased to 0.5%, and the horse in `i4` is untouched — but
+    the erase it produces is worse overall, for a reason the shield cannot fix.
+
+    Dilation had been quietly compensating for SAM *under*-segmenting an object's base.
+    Withholding the ring where the Eiffel Tower meets the tree line stops the bleed onto
+    the trees and leaves a pale ghost of the tower's base standing, which is far more
+    visible than the smeared shoe it prevents. Across eleven removals: one clear
+    improvement (`i6`, cost 28.5 -> 15.0), one clear regression (`i8`, and it is the case
+    that motivated the work), and the rest unchanged.
+
+    Kept, disabled, and tested rather than deleted — the same treatment `semantic.py`
+    gets. The measurement is the asset; re-enabling is this flag. What would make it pay
+    is fixing the under-segmentation it exposes, which is the other half of TD-004."""
+
+    shield_max_inside: float = 0.30
+    """Above this fraction inside the target, a probed region is one of its own parts.
+
+    The one threshold in occluder shielding that decides quality rather than cost, and
+    the one that had to be measured. MobileSAM is part-aware: probing near a horse's
+    edge returns *the leg*, and at the original 0.80 that leg was shielded from the
+    horse's own erasure — 26% of the animal left standing. At 0.30 the horse is untouched
+    and the jumper's shoe in `i8` still goes from 10.3% erased to 5.6%. Values below 0.30
+    measured identically on the golden set, so this is the loose end of a plateau rather
+    than a peak fitted to eleven pictures."""
+
+    shield_max_area: float = 0.25
+    """Above this fraction of the frame, a probed region is scenery rather than an object.
+
+    Probing beside a tower returns the sky; shielding it would withhold most of the
+    dilation ring for no benefit."""
+
+    shield_margin_frac: float = 0.25
+    """Slack next to the target that is never shielded, as a fraction of the dilation.
+
+    Dilation exists because a mask cut exactly on the silhouette leaves a halo of the
+    object's own edge pixels. Shielding a touching neighbour must not take that back, so
+    the first quarter of the growth is always allowed.
+
+    This is also what makes the shield safe by construction rather than by a checked
+    percentage: the margin covers the selected region, so a shield can only ever withhold
+    pixels that dilation added, never the object the user asked to remove."""
+
     growth_penalty: float = 25.0
     """Cost charged per unit of relative mask growth when comparing candidates."""
 

@@ -30,7 +30,8 @@ import numpy as np
 from editgpt_core import EditOp, EditSpec, Grounding
 from editgpt_core.errors import MaskTooSmallError
 from editgpt_core.rle import decode as decode_rle
-from editgpt_models.compositing import RGB, Mask
+from editgpt_models.compositing import RGB, Mask, reproject
+from editgpt_models.config import load_thresholds
 from editgpt_models.execute import Models, execute
 from editgpt_models.registry import model_path
 from editgpt_models.slot import ModelSlot
@@ -44,12 +45,17 @@ GREEN = (46, 160, 67)
 """The stand-in backdrop colour until the request carries one. TD-020."""
 
 MAX_SIDE = 2048
-"""Longest side an edit runs at.
+"""Longest side an edit is *computed* at. The result is returned at the uploaded size.
 
 The gateway already caps uploads at 40 MP, which bounds *memory*; this bounds *time*.
-A 15.9 MP erase is several minutes of model work for a result nobody can see more of
-than a 2048px view. The result is returned at this size, which is a visible product
-decision rather than an implementation detail — recorded as TD-021.
+The two are not the same knob, and conflating them is what made a 15.9 MP upload come
+back at roughly 3 MP (TD-021): the bound belonged on the work, not on the answer.
+`compositing.reproject` carries the finished edit back onto the full-resolution original,
+which costs one resample of a region whose detail was fixed at 512 px by the fill anyway.
+
+`UPSCALE` is the exception and stays bounded by this on both sides. Its whole purpose is
+to enlarge, so a 15.9 MP input would ask Real-ESRGAN for a 63 MP output and the 2200 MB
+RSS ceiling would stop it long before the user got a picture.
 """
 
 
@@ -67,17 +73,32 @@ def detector() -> Any:
 
 
 def decode_image(data: bytes) -> RGB:
-    """Bytes to RGB, downscaled to the working size.
+    """Bytes to RGB at the resolution they arrived at.
 
     Pillow rather than OpenCV because the gateway already validated the format with it,
     and a second decoder is a second set of format quirks to be surprised by.
+
+    This used to downscale to `MAX_SIDE`, which bounded the edit and shrank the result
+    along with it. `working_size` bounds the edit now; the full frame is kept so the
+    answer can be given back at the size it was asked about.
     """
-    from editgpt_models.enhance import downscale_to
     from PIL import Image
 
     with Image.open(io.BytesIO(data)) as image:
-        rgb = np.asarray(image.convert("RGB"), dtype=np.uint8)
-    return downscale_to(rgb, MAX_SIDE)
+        return np.asarray(image.convert("RGB"), dtype=np.uint8)
+
+
+def working_size(image: RGB) -> RGB:
+    """The bounded image an edit is computed on.
+
+    Every model in the pipeline already runs at a fixed size — the erasers at 512 inside a
+    crop, SAM at 1024, the detector at 800 — so this bounds the work *around* them: the
+    per-pass full-frame colour conversions in `fill_metrics`, the crop resampling, and the
+    copies each pass makes. Those are the parts that scale with the upload.
+    """
+    from editgpt_models.enhance import downscale_to
+
+    return downscale_to(image, MAX_SIDE)
 
 
 FORMATS: dict[str, str] = {
@@ -130,40 +151,63 @@ def ground_phrase(image: RGB, phrase: str) -> Grounding:
     )
 
 
-def region_for(spec: EditSpec, image: RGB) -> tuple[Mask | None, str]:
-    """The region to act on, and where it came from.
+@dataclass(frozen=True, slots=True)
+class Region:
+    """What an edit acts on, and what it must leave alone."""
 
-    An explicit mask always wins: if the user brushed it, no model gets a vote. Otherwise
-    the phrase is grounded. `UPSCALE` needs no region at all.
+    mask: Mask | None
+    origin: str
+    """Where the region came from, for the log and the audit trail."""
+
+    protect: Mask | None = None
+    """Neighbouring objects the mask's dilation must not reach. See
+    `segment.occluder_shield`."""
+
+
+def region_for(spec: EditSpec, image: RGB) -> Region:
+    """The region to act on, where it came from, and what must be kept out of it.
+
+    An explicit mask always wins: if the user brushed it, no model gets a vote — and
+    that extends to occluder shielding, which is why a brushed region carries no
+    shield. A grounded phrase is the model's own guess at a boundary and does get one.
+    `UPSCALE` needs no region at all.
     """
     if spec.op is EditOp.UPSCALE:
-        return None, "whole image"
+        return Region(None, "whole image")
 
     if spec.mask_ref is not None:
         # `decode` returns 0/1; everything downstream treats a mask as 0/255, and a mask
         # of ones survives `mask > 0` while looking empty in any image written for review.
         binary = np.asarray(decode_rle(spec.mask_ref) * 255, dtype=np.uint8)
-        return _fit_mask(binary, image), f"{spec.mask_source.value} mask"
+        return Region(_fit_mask(binary, image), f"{spec.mask_source.value} mask")
 
     if not spec.target:
         if spec.op is EditOp.BACKGROUND:
             # Flood-filling the backdrop needs no region. Only if the border turns out not
             # to be uniform does `execute` need one, and it says so then.
-            return None, "backdrop, detected"
+            return Region(None, "backdrop, detected")
         raise MaskTooSmallError(f"{spec.op} needs a target phrase or a mask, and has neither")
 
-    from editgpt_models.segment import mask_from_phrase
+    from editgpt_models.segment import mask_from_phrase, occluder_shield
 
-    found = mask_from_phrase(
-        detector(), session("sam-encoder"), session("sam-decoder"), image, spec.target
-    )
+    encoder, decoder = session("sam-encoder"), session("sam-decoder")
+    found = mask_from_phrase(detector(), encoder, decoder, image, spec.target)
     if not found.mask.any():
         if spec.op is EditOp.BACKGROUND:
-            return None, "backdrop, detected (nothing matched the phrase)"
+            return Region(None, "backdrop, detected (nothing matched the phrase)")
         # The phrase names nothing in this picture. A real outcome, not a fault — the
         # user is told, and the brush is the way through.
         raise MaskTooSmallError(f"nothing in this image matches {spec.target!r}")
-    return found.mask, f"{found.source} ({found.confidence:.2f})"
+    # Off by default: measured on the golden set, and it makes the erase worse overall.
+    # `Thresholds.shield` carries the numbers. Removal only when it is on, because the
+    # generative lane paints into the hole rather than continuing the background, so a
+    # hole with a bite out of it comes back with a seam.
+    shield = (
+        occluder_shield(encoder, decoder, image, found.mask)
+        if spec.op is EditOp.REMOVE and load_thresholds().shield
+        else None
+    )
+    return Region(found.mask, f"{found.source} ({found.confidence:.2f})", shield)
 
 
 def _fit_mask(mask: Mask, image: RGB) -> Mask:
@@ -223,32 +267,43 @@ class Edited:
 
 def edit(source: bytes, spec: EditSpec) -> Edited:
     """Run the job's edit and return the encoded result with its real shape."""
-    image = decode_image(source)
-    mask, origin = region_for(spec, image)
+    original = decode_image(source)
+    image = working_size(original)
+    region = region_for(spec, image)
 
     result = execute(
         models_for(spec),
         spec.op,
         image,
-        mask=mask,
+        mask=region.mask,
+        protect=region.protect,
         content=spec.content,
         colour=GREEN,
+    )
+
+    # `UPSCALE` produces its own geometry and is deliberately left at the working size;
+    # everything else is an edit *of* the upload and is returned at the upload's size.
+    final = (
+        result.image
+        if spec.op is EditOp.UPSCALE
+        else reproject(original, result.image, result.mask)
     )
     log.info(
         "edit.done",
         extra={
             "op": spec.op.value,
-            "region": origin,
+            "region": region.origin,
             "strategy": result.strategy,
             "cost": result.cost,
             "seconds": result.seconds,
             "megapixels": round(image.shape[0] * image.shape[1] / 1e6, 2),
+            "returned_megapixels": round(final.shape[0] * final.shape[1] / 1e6, 2),
         },
     )
-    data, content_type = encode_image(result.image, spec.image_ref.content_type)
+    data, content_type = encode_image(final, spec.image_ref.content_type)
     return Edited(
         data=data,
         content_type=content_type,
-        width=int(result.image.shape[1]),
-        height=int(result.image.shape[0]),
+        width=int(final.shape[1]),
+        height=int(final.shape[0]),
     )

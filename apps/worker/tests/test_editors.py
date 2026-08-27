@@ -287,3 +287,146 @@ def test_the_reported_size_is_what_was_produced_not_what_was_asked_for(
     made = editors.edit(png(64, 48), spec(EditOp.UPSCALE, target=None))
 
     assert (made.width, made.height) == (128, 96)
+
+
+# ---------------------------------------------------------------- occluder shielding
+
+
+def test_shielding_is_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The measured default. `Thresholds.shield` records why."""
+    from editgpt_models.segment import Segmentation
+
+    found = np.zeros((48, 64), np.uint8)
+    found[10:30, 10:30] = 255
+    asked: list[str] = []
+
+    monkeypatch.setattr(editors, "detector", lambda: object())
+    monkeypatch.setattr(editors, "session", lambda _key: object())
+    monkeypatch.setattr(
+        "editgpt_models.segment.mask_from_phrase",
+        lambda *_a, **_k: Segmentation(found, 0.9, "sam-box"),
+    )
+    monkeypatch.setattr(
+        "editgpt_models.segment.occluder_shield", lambda *_a, **_k: asked.append("probed")
+    )
+
+    region = editors.region_for(spec(EditOp.REMOVE), np.zeros((48, 64, 3), np.uint8))
+    assert region.protect is None
+    assert not asked, "shielding ran despite being off"
+
+
+def test_a_brushed_region_carries_no_shield(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ "If the user drew it, no model gets a vote" extends to shielding. Trimming a
+    hand-drawn selection because a model disagrees about its edges is the same override
+    the brush exists to escape."""
+    called: list[str] = []
+    monkeypatch.setattr(
+        "editgpt_models.segment.occluder_shield", lambda *_a, **_k: called.append("asked")
+    )
+
+    brushed = np.zeros((48, 64), np.uint8)
+    brushed[10:30, 10:30] = 255
+    region = editors.region_for(spec(mask=brushed), np.zeros((48, 64, 3), np.uint8))
+
+    assert region.protect is None
+    assert not called
+
+
+def test_a_grounded_removal_is_shielded_when_shielding_is_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Off by default — the golden set says it makes the erase worse overall — so the
+    test states the setting it depends on rather than inheriting whatever is on disk."""
+    from editgpt_models.config import Thresholds
+    from editgpt_models.segment import Segmentation
+
+    monkeypatch.setattr(editors, "load_thresholds", lambda: Thresholds(shield=True))
+
+    found = np.zeros((48, 64), np.uint8)
+    found[10:30, 10:30] = 255
+    shield = np.zeros((48, 64), np.uint8)
+    shield[30:40, 10:30] = 255
+
+    monkeypatch.setattr(editors, "detector", lambda: object())
+    monkeypatch.setattr(editors, "session", lambda _key: object())
+    monkeypatch.setattr(
+        "editgpt_models.segment.mask_from_phrase",
+        lambda *_a, **_k: Segmentation(found, 0.9, "sam-box"),
+    )
+    monkeypatch.setattr("editgpt_models.segment.occluder_shield", lambda *_a, **_k: shield)
+
+    region = editors.region_for(spec(EditOp.REMOVE), np.zeros((48, 64, 3), np.uint8))
+    assert region.protect is not None
+    assert int((region.protect > 0).sum()) > 0
+
+
+def test_only_removal_pays_for_a_shield(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Probing is ~30 decoder calls; the generative lane cannot use the answer."""
+    from editgpt_models.config import Thresholds
+    from editgpt_models.segment import Segmentation
+
+    monkeypatch.setattr(editors, "load_thresholds", lambda: Thresholds(shield=True))
+
+    found = np.zeros((48, 64), np.uint8)
+    found[10:30, 10:30] = 255
+    asked: list[str] = []
+
+    monkeypatch.setattr(editors, "detector", lambda: object())
+    monkeypatch.setattr(editors, "session", lambda _key: object())
+    monkeypatch.setattr(
+        "editgpt_models.segment.mask_from_phrase",
+        lambda *_a, **_k: Segmentation(found, 0.9, "sam-box"),
+    )
+    monkeypatch.setattr(
+        "editgpt_models.segment.occluder_shield", lambda *_a, **_k: asked.append("probed")
+    )
+
+    region = editors.region_for(
+        spec(EditOp.REPLACE, content="a sheep"), np.zeros((48, 64, 3), np.uint8)
+    )
+    assert region.protect is None
+    assert not asked
+
+
+def test_the_shield_reaches_execute(
+    captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The plumbing between the two, which is where a shield would silently go missing."""
+    shield = np.zeros((48, 64), np.uint8)
+    shield[30:40, 10:30] = 255
+    monkeypatch.setattr(
+        editors, "region_for", lambda _s, _i: editors.Region(shield.copy(), "stub", shield)
+    )
+
+    editors.edit(png(), spec(EditOp.REMOVE))
+    assert captured["protect"] is not None
+
+
+# ---------------------------------------------------------------- returned resolution
+
+
+def test_a_large_upload_comes_back_at_the_size_it_arrived_at(captured: dict[str, Any]) -> None:
+    """TD-021. The bound belongs on the work, not on the answer: a 4000x3000 photograph
+    was returning at 2048x1536 and the API never said so."""
+    brushed = np.zeros((3000, 4000), np.uint8)
+    brushed[1000:2000, 1000:2000] = 255
+
+    made = editors.edit(png(4000, 3000), spec(mask=brushed, width=4000, height=3000))
+    assert (made.width, made.height) == (4000, 3000)
+
+
+def test_the_edit_still_runs_at_the_bounded_size(captured: dict[str, Any]) -> None:
+    """The other half of TD-021, and the half that must not regress: `fill_metrics` runs
+    two full-frame colour conversions per pass, so the *work* stays bounded."""
+    brushed = np.zeros((3000, 4000), np.uint8)
+    brushed[1000:2000, 1000:2000] = 255
+
+    editors.edit(png(4000, 3000), spec(mask=brushed, width=4000, height=3000))
+    assert max(captured["image"].shape[:2]) == editors.MAX_SIDE
+
+
+def test_upscale_is_exempt_from_reprojection(captured: dict[str, Any]) -> None:
+    """It produces its own geometry, and asking Real-ESRGAN for a 63 MP output would meet
+    the RSS ceiling long before it produced a picture."""
+    made = editors.edit(png(4000, 3000), spec(EditOp.UPSCALE, target=None, width=4000, height=3000))
+    assert max(made.width, made.height) == editors.MAX_SIDE

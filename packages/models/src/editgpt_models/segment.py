@@ -17,6 +17,8 @@ The first stage has two implementations and they are not equivalent:
 
 from __future__ import annotations
 
+import hashlib
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -26,8 +28,8 @@ import numpy as np
 from editgpt_core.rle import encode as encode_rle
 from editgpt_core.spec import Grounding, MaskCandidate
 
-from editgpt_models.compositing import RGB, Mask
-from editgpt_models.config import load_thresholds
+from editgpt_models.compositing import RGB, Mask, dilate_px
+from editgpt_models.config import Thresholds, load_thresholds
 
 ENCODER_SIZE = 1024
 SAM_MEAN = np.array([123.675, 116.28, 103.53], dtype=np.float32)
@@ -45,6 +47,8 @@ def min_sam_iou() -> float:
     """
     return load_thresholds().min_sam_iou
 
+
+log = logging.getLogger(__name__)
 
 CLIPSEG_MODEL = "CIDAS/clipseg-rd64-refined"
 CLIPSEG_THRESHOLD = 0.4
@@ -115,6 +119,34 @@ def _decode(
     return mask, iou
 
 
+_LAST_EMBEDDING: tuple[str, np.ndarray, float] | None = None
+
+
+def embed(encoder: Any, rgb: RGB) -> tuple[np.ndarray, float]:
+    """Encode an image for the decoder, reusing the last result if it is the same image.
+
+    The split in `masks_from_boxes` — expensive encoder, nearly-free decoder — has a
+    second consequence once occluder probing exists: one removal encodes the same image
+    twice, once to turn a box into a mask and once to probe around that mask. The second
+    encode is ~1.5 s of pure waste.
+
+    One entry is enough. The worker runs at concurrency 1 by design (`ModelSlot` holds a
+    single heavy model resident), so there is never a second image in flight. The key is
+    a hash of the pixels rather than an object identity, so a cache hit means the same
+    picture rather than the same array — correctness does not rest on the caller reusing
+    a buffer.
+    """
+    global _LAST_EMBEDDING
+    digest = hashlib.blake2b(np.ascontiguousarray(rgb).tobytes(), digest_size=16).hexdigest()
+    if _LAST_EMBEDDING is not None and _LAST_EMBEDDING[0] == digest:
+        return _LAST_EMBEDDING[1], _LAST_EMBEDDING[2]
+
+    prepared, scale = preprocess_for_encoder(rgb, encoder)
+    embedding = encoder.run(None, {encoder.get_inputs()[0].name: prepared})[0]
+    _LAST_EMBEDDING = (digest, embedding, scale)
+    return embedding, scale
+
+
 def masks_from_boxes(
     encoder: Any, decoder: Any, rgb: RGB, boxes: Sequence[tuple[float, float, float, float]]
 ) -> list[Segmentation]:
@@ -131,8 +163,7 @@ def masks_from_boxes(
         return []
 
     height, width = rgb.shape[:2]
-    prepared, scale = preprocess_for_encoder(rgb, encoder)
-    embedding = encoder.run(None, {encoder.get_inputs()[0].name: prepared})[0]
+    embedding, scale = embed(encoder, rgb)
 
     found = []
     for x0, y0, x1, y1 in boxes:
@@ -264,8 +295,7 @@ def mask_from_seed(
         return Segmentation(mask=np.zeros((height, width), np.uint8), confidence=0.0, source="none")
 
     peak_y, peak_x = np.unravel_index(int(np.argmax(heat * seed)), heat.shape)
-    prepared, scale = preprocess_for_encoder(rgb, encoder)
-    embedding = encoder.run(None, {encoder.get_inputs()[0].name: prepared})[0]
+    embedding, scale = embed(encoder, rgb)
 
     coords = np.array(
         [[[int(xs.min()), int(ys.min())], [int(xs.max()), int(ys.max())], [peak_x, peak_y]]],
@@ -303,3 +333,129 @@ def seed_from_text(processor: Any, model: Any, image: Any, target: str) -> np.nd
         logits = logits[None, ...]
     heat = torch.sigmoid(logits)[0].numpy()
     return np.asarray(cv2.resize(heat, image.size, interpolation=cv2.INTER_LINEAR))
+
+
+PROBE_SPACING = 8
+"""Grid spacing, in pixels at the working resolution, for occluder probes.
+
+Not a fitted value and not a quality knob: it is how finely the target's edge is walked.
+Cost is bounded by `PROBE_CAP` and by the "already explained" skip rather than by this,
+so it is set fine enough that a small occluder — a shoe against a tower — is not stepped
+over. Measured: at 16 px the jumper's shoe in `i8` is missed on some runs; at 8 px it is
+found on all of them, for 32 decoder calls and 0.8 s.
+"""
+
+PROBE_CAP = 64
+"""Ceiling on decoder calls per shield, so a long boundary cannot dominate an edit."""
+
+
+def occluder_shield(
+    encoder: Any,
+    decoder: Any,
+    rgb: RGB,
+    target: Mask,
+    *,
+    thresholds: Thresholds | None = None,
+) -> Mask:
+    """Regions next to `target` that belong to something else, and must not be erased.
+
+    The failure this addresses: erasing the Eiffel Tower also erased the shoe of a man
+    jumping in front of it, because the mask is grown by 5% of the object's longest side
+    and that slack lands on whatever is adjacent. Dilation is deliberately generous — a
+    tight mask leaves a halo of the object's own edge pixels — so the fix is not less
+    slack but slack that stops at the next object.
+
+    Occluders are found rather than assumed. Every probe point sits *outside* the target,
+    on a grid across the band dilation would reach, and each is one decoder call against
+    an embedding that already exists. A returned region is treated as an occluder when it
+    is coherent, bounded in size, and mostly **not** the target.
+
+    That last test is the load-bearing one, and it is containment rather than IoU.
+    MobileSAM is part-aware: a point on a horse's edge returns *the leg*, which is small,
+    confident, and has a low IoU against the whole horse — it passes every other filter
+    and shields a quarter of the animal from its own erasure. What separates a part from
+    an occluder is that a part lies inside the target and an occluder does not.
+
+    A margin around the target is never shielded, which bounds the damage a wrong shield
+    can do and does it structurally rather than by a percentage check. Two things follow.
+    The anti-aliasing slack dilation exists to provide survives even where a neighbour is
+    pressed against the target. And because the margin covers the selection itself, the
+    shield can only ever withhold *grown* pixels — so a shield, however wrong, can never
+    leave the subject standing in the result.
+
+    **Known limitation.** This only sees occluders that reach outside the target's
+    silhouette. An occluder *within* it — the glove gripping the bat in `i9`, which SAM
+    folds into the bat itself — is invisible here, and probing inside is what caused the
+    horse regression above. Separating those needs the mask hierarchy that MobileSAM's
+    multi-mask decoder exposes and this single-mask export does not. TD-004 carries it.
+    """
+    limits = thresholds or load_thresholds()
+    height, width = target.shape[:2]
+    shape = (height, width)
+    band = dilate_px(target)
+    if band <= 0 or not target.any():
+        return np.zeros(shape, np.uint8)
+
+    reach = cv2.dilate(target, np.ones((band, band), np.uint8))
+    outward = (reach > 0) & (target == 0)
+    ys, xs = np.nonzero(outward)
+    if len(xs) == 0:
+        return np.zeros(shape, np.uint8)
+
+    seen: set[tuple[int, int]] = set()
+    points: list[tuple[int, int]] = []
+    for x, y in zip(xs, ys, strict=True):
+        cell = (int(x) // PROBE_SPACING, int(y) // PROBE_SPACING)
+        if cell in seen:
+            continue
+        seen.add(cell)
+        points.append((int(x), int(y)))
+
+    embedding, scale = embed(encoder, rgb)
+    inside = target > 0
+    shield = np.zeros(shape, bool)
+    # Any region a probe has already returned, whether kept or rejected. Probing the sky
+    # around a tower returns the same sky every time; skipping points it already covers
+    # is what makes an 8 px grid affordable.
+    explained = np.zeros(shape, bool)
+    calls = 0
+
+    for x, y in points:
+        if explained[y, x] or calls >= PROBE_CAP:
+            continue
+        found, confidence = _decode(
+            decoder,
+            embedding,
+            np.array([[[x, y], [0.0, 0.0]]], dtype=np.float32),
+            np.array([[1, -1]], dtype=np.float32),  # one positive point, one padding
+            shape,
+            scale,
+        )
+        calls += 1
+        region = found > 0
+        if not region.any():
+            continue
+        explained |= region
+        if confidence < limits.min_sam_iou:
+            continue
+        if region.mean() > limits.shield_max_area:
+            continue
+        if (region & inside).sum() / region.sum() > limits.shield_max_inside:
+            continue
+        shield |= region
+
+    if not shield.any():
+        return np.zeros(shape, np.uint8)
+
+    # `band` is a kernel size, so the growth it produces is half of it. An odd kernel of
+    # 2r+1 dilates by exactly r, which keeps the margin a stated distance rather than an
+    # artefact of OpenCV's anchor placement for even kernels.
+    margin = max(round(band / 2 * limits.shield_margin_frac), 1)
+    keep_clear = cv2.dilate(target, np.ones((2 * margin + 1, 2 * margin + 1), np.uint8))
+    shield &= keep_clear == 0
+
+    log.info(
+        "shield.applied",
+        extra={"probes": calls, "fraction": round(float(shield.mean()), 4), "margin": margin},
+    )
+    return np.asarray(shield, dtype=np.uint8) * 255

@@ -208,3 +208,59 @@ def test_supported_matches_what_the_gateway_advertises() -> None:
     assert {EditOp.REMOVE, EditOp.ADD, EditOp.REPLACE, EditOp.BACKGROUND, EditOp.UPSCALE} == set(
         SUPPORTED
     )
+
+
+# ---------------------------------------------------------------- occluder shielding
+
+
+def test_protection_is_applied_after_dilation_not_before() -> None:
+    """The order is the whole point.
+
+    The shield exists to stop the mask's growth reaching a neighbour. Subtracting it
+    before growing would let the dilation walk straight back over it, which reads as
+    working and is not — the produced mask is the audit trail, so it is asserted there.
+    """
+    models, _ = erasers()
+    asked = square()
+    # A strip immediately outside the selection, well inside where dilation will reach.
+    shield = np.zeros((256, 256), np.uint8)
+    shield[140:170, 60:140] = 255
+
+    edit = execute(models, EditOp.REMOVE, image(), mask=asked, protect=shield)
+
+    assert not (edit.mask > 0)[shield > 0].any(), "the growth reached into the shield"
+    assert int((edit.mask > 0).sum()) > int((asked > 0).sum()), "nothing was dilated at all"
+
+
+def test_the_selected_region_is_erased_even_under_a_shield() -> None:
+    """A shield may withhold what dilation added; it may never withhold what was asked
+    for. Otherwise the subject is left standing and the result looks like a no-op."""
+    models, _ = erasers()
+    asked = square()
+    everything = np.full((256, 256), 255, np.uint8)
+
+    edit = execute(models, EditOp.REMOVE, image(), mask=asked, protect=everything)
+    assert (edit.mask > 0)[asked > 0].all()
+
+
+def test_the_generative_lane_ignores_a_shield() -> None:
+    """It paints into the hole rather than continuing the background, so a hole with a
+    bite out of it comes back with a seam."""
+    painted: list[str] = []
+
+    def provider(rgb: np.ndarray, mask: np.ndarray, prompt: str) -> np.ndarray:
+        painted.append(prompt)
+        return rgb
+
+    shield = np.zeros((256, 256), np.uint8)
+    shield[60:140, 60:140] = 255
+    edit = execute(
+        Models(fill=provider),
+        EditOp.ADD,
+        image(),
+        mask=square(),
+        protect=shield,
+        content="a hat",
+    )
+    assert painted == ["a hat"]
+    assert (edit.mask > 0)[shield > 0].any(), "the shield was applied to a generative edit"
