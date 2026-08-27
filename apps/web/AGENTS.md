@@ -19,3 +19,20 @@ not a desktop tool with a phone layout bolted on.
 
 Never send image bytes through the app. The gateway owns storage; the browser talks to it
 with references.
+
+## Clerk
+
+`middleware.ts` uses an allowlist of **public** routes, not a list of protected ones. A
+page added later is protected by default; a list of protected routes silently leaves
+anything nobody remembered to add wide open.
+
+**Every `/v1` call needs a bearer token**, fetched per request in `lib/api.ts`. Do not
+cache one in a module: Clerk's session tokens are short-lived and a cached token is a
+request that starts failing a minute later.
+
+**`<img src>` cannot send an `Authorization` header**, which is why `imageObjectUrl`
+fetches and hands back a blob URL — and why the caller must `revokeObjectURL` it. Signed
+URLs (Phase 9) are the real fix.
+
+**`EventSource` cannot send one either**, so `streamJob` reads the SSE body off a `fetch`
+stream and parses the frames by hand. It returns a cancel function; call it on unmount.
