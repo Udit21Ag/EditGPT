@@ -25,6 +25,11 @@ Mask = npt.NDArray[np.uint8]
 REFCOCO_REPO = "jxu124/refcoco-benchmark"
 REFCOCOG_VAL = "data/refcocog_umd_val-00000-of-00001-23c691a8c4bd006d.parquet"
 REMOVALBENCH = "BaiLing/RemovalBench"
+# A second paired set, deliberately from a different distribution: RemovalBench is 69
+# curated stills, RORD-50 is real video captures of the same scene shot twice, with and
+# without the object. TD-013 requires a conclusion about the quality proxy to hold on
+# more than one benchmark before it is acted on.
+RORD = "HigherHu/RORD-50"
 
 
 def cache_dir() -> Path:
@@ -55,6 +60,18 @@ class RemovalSample:
     mask: Mask
     baseline: RGB | None = None
     """A reference system's output, where the dataset ships one."""
+
+    group: str = ""
+    """Samples sharing a group are not independent and must not span a train/test split.
+
+    Empty means the sample is its own group. RORD frames from one clip share a scene, a
+    camera and usually an object, so scoring a model on frame 60 after fitting it on
+    frame 20 measures nothing.
+    """
+
+    @property
+    def group_id(self) -> str:
+        return self.group or self.id
 
 
 def _to_rgb(image: Any) -> RGB:
@@ -191,3 +208,94 @@ def load_removal(limit: int = 100) -> Iterator[RemovalSample]:
             mask=np.asarray((mask > 127) * 255, dtype=np.uint8),
             baseline=_to_rgb(baseline_path) if baseline_path.exists() else None,
         )
+
+
+def load_rord(limit: int = 100, *, frames_per_clip: int = 3) -> Iterator[RemovalSample]:
+    """RORD-50: real video captures of the same scene shot with and without an object.
+
+    The second paired dataset TD-013 requires. Its distribution is nothing like
+    RemovalBench's curated stills — handheld indoor and outdoor footage, cast shadows,
+    motion blur — which is the point: a conclusion that holds on one benchmark and not
+    the other is not a conclusion.
+
+    Frames are sampled evenly through each clip and every sample carries its clip as its
+    group, because consecutive frames of one scene are not independent observations.
+
+    One caveat that shapes how the numbers may be read: the two takes are separate
+    captures, so even a perfect fill does not reach SSIM 1.0 — outside the mask the pair
+    differs by 2-4 grey levels from compression and camera drift. That floor is common
+    to every eraser scored on a given sample, so *ranking* them is valid; the absolute
+    SSIM is not comparable to RemovalBench's.
+    """
+    import cv2
+    from huggingface_hub import snapshot_download
+
+    root = Path(
+        snapshot_download(
+            repo_id=RORD,
+            repo_type="dataset",
+            cache_dir=str(cache_dir()),
+            allow_patterns=["videos/*", "gts/*", "masks/*"],
+        )
+    )
+
+    yielded = 0
+    for video_path in sorted((root / "videos").glob("*.mp4")):
+        if yielded >= limit:
+            return
+        clip = video_path.stem
+        gt_path, mask_path = root / "gts" / video_path.name, root / "masks" / video_path.name
+        if not (gt_path.exists() and mask_path.exists()):
+            continue
+
+        capture = cv2.VideoCapture(str(video_path))
+        total = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+        capture.release()
+        if total <= 0:
+            continue
+
+        # Evenly spaced and endpoint-excluding: the first and last frames of a handheld
+        # clip are the ones most likely to be mid-motion or mid-exposure-change.
+        wanted = [round(total * (i + 1) / (frames_per_clip + 1)) for i in range(frames_per_clip)]
+        for index, (image, ground_truth, mask) in _rord_frames(
+            video_path, gt_path, mask_path, wanted
+        ):
+            if yielded >= limit:
+                return
+            if int((mask > 0).sum()) < 64:
+                continue  # the object is out of frame here; nothing to remove
+            yield RemovalSample(
+                id=f"{clip}#{index}",
+                image=image,
+                ground_truth=ground_truth,
+                mask=mask,
+                group=clip,
+            )
+            yielded += 1
+
+
+def _rord_frames(
+    video: Path, gt: Path, mask: Path, indices: list[int]
+) -> Iterator[tuple[int, tuple[RGB, RGB, Mask]]]:
+    """Read the same frame numbers out of three parallel clips."""
+    import cv2
+
+    captures = [cv2.VideoCapture(str(p)) for p in (video, gt, mask)]
+    try:
+        for index in indices:
+            frames = []
+            for capture in captures:
+                capture.set(cv2.CAP_PROP_POS_FRAMES, index)
+                ok, frame = capture.read()
+                if not ok:
+                    break
+                frames.append(np.asarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), dtype=np.uint8))
+            if len(frames) != 3:
+                continue
+            # The mask ships as a lossy-compressed video, so it arrives with ringing
+            # around the object rather than as clean 0/255. Threshold at the midpoint.
+            binary = np.asarray((frames[2][:, :, 0] > 127) * 255, dtype=np.uint8)
+            yield index, (frames[0], frames[1], binary)
+    finally:
+        for capture in captures:
+            capture.release()

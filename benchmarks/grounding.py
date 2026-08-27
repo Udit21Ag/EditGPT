@@ -5,7 +5,17 @@ proxy — a correct mask of a non-convex object covers only part of its bounding
 benchmark uses RefCOCOg, where the ground truth is a real segmentation mask, so it
 reports the field's standard metric (mask IoU) and nothing was fitted to it.
 
-    uv run python -m benchmarks.grounding --limit 200
+Two grounding paths are measured, on identical samples in the same order, so the
+comparison is like-for-like:
+
+* ``detector`` — Grounding DINO box -> MobileSAM (`segment.mask_from_phrase`)
+* ``clipseg``  — CLIPSeg heatmap -> MobileSAM (`segment.mask_from_seed`), the incumbent
+
+They run in separate processes rather than one, because CLIPSeg holds ~1.2 GB of torch
+resident and the detector peaks near 1.4 GB; on an 8 GB machine that is not a comparison
+worth risking a swap storm for.
+
+    uv run python -m benchmarks.grounding --limit 250 --path detector
 """
 
 from __future__ import annotations
@@ -15,6 +25,7 @@ import json
 import statistics
 import sys
 import time
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -23,7 +34,13 @@ import numpy as np
 from editgpt_models.compositing import RGB
 from editgpt_models.erase import make_session
 from editgpt_models.registry import model_path
-from editgpt_models.segment import load_clipseg, mask_from_seed, seed_from_text
+from editgpt_models.segment import (
+    Segmentation,
+    load_clipseg,
+    mask_from_phrase,
+    mask_from_seed,
+    seed_from_text,
+)
 from PIL import Image
 
 from benchmarks.datasets import Mask, load_grounding
@@ -72,25 +89,51 @@ def _fit(image: RGB, mask: Mask, side: int) -> tuple[RGB, Mask]:
     )
 
 
-def run(limit: int) -> list[GroundingResult]:
+def _clipseg_path(limit: int) -> Iterator[tuple[str, str, Mask, Mask, Segmentation]]:
+    """The incumbent: a CLIPSeg heatmap refined by SAM."""
     processor, clipseg = load_clipseg()
     encoder = make_session(model_path("sam-encoder"))
     decoder = make_session(model_path("sam-decoder"))
 
-    results: list[GroundingResult] = []
     for sample in load_grounding(limit=limit):
         image, truth = _fit(sample.image, sample.mask, WORKING_SIDE)
-        started = time.monotonic()
         heat = seed_from_text(processor, clipseg, Image.fromarray(image), sample.phrase)
-        segmentation = mask_from_seed(encoder, decoder, image, heat)
-        elapsed = time.monotonic() - started
+        yield sample.id, sample.phrase, image, truth, mask_from_seed(encoder, decoder, image, heat)
 
+
+def _detector_path(limit: int) -> Iterator[tuple[str, str, Mask, Mask, Segmentation]]:
+    """The replacement: a Grounding DINO box refined by SAM."""
+    from editgpt_models.detect import load_detector
+
+    detector = load_detector()
+    encoder = make_session(model_path("sam-encoder"))
+    decoder = make_session(model_path("sam-decoder"))
+
+    for sample in load_grounding(limit=limit):
+        image, truth = _fit(sample.image, sample.mask, WORKING_SIDE)
+        yield (
+            sample.id,
+            sample.phrase,
+            image,
+            truth,
+            mask_from_phrase(detector, encoder, decoder, image, sample.phrase),
+        )
+
+
+PATHS = {"detector": _detector_path, "clipseg": _clipseg_path}
+
+
+def run(limit: int, path: str) -> list[GroundingResult]:
+    results: list[GroundingResult] = []
+    started = time.monotonic()
+    for identifier, phrase, _image, truth, segmentation in PATHS[path](limit):
+        elapsed = time.monotonic() - started
         iou, precision, recall = mask_iou(segmentation.mask, truth)
         results.append(
             GroundingResult(
-                id=sample.id,
-                phrase=sample.phrase,
-                words=len(sample.phrase.split()),
+                id=identifier,
+                phrase=phrase,
+                words=len(phrase.split()),
                 iou=round(iou, 4),
                 precision=round(precision, 4),
                 recall=round(recall, 4),
@@ -100,6 +143,7 @@ def run(limit: int) -> list[GroundingResult]:
                 seconds=round(elapsed, 2),
             )
         )
+        started = time.monotonic()
     return results
 
 
@@ -127,15 +171,16 @@ def summarise(results: list[GroundingResult]) -> dict[str, float | int]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=200)
+    parser.add_argument("--path", choices=sorted(PATHS), default="detector")
     args = parser.parse_args()
 
-    results = run(args.limit)
+    results = run(args.limit, args.path)
     if not results:
         print("no samples", file=sys.stderr)
         return 2
 
     stats = summarise(results)
-    print(f"\nRefCOCOg validation, held out, n={stats['n']}")
+    print(f"\nRefCOCOg validation, held out, path={args.path}, n={stats['n']}")
     for key, value in stats.items():
         if key != "n":
             print(f"  {key:16} {value}")
@@ -155,9 +200,11 @@ def main() -> int:
         print(f"    >  5 words      n={len(long_):4d}  mIoU {statistics.mean(long_):.4f}")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    path = OUT_DIR / "grounding.json"
+    path = OUT_DIR / f"grounding-{args.path}.json"
     path.write_text(
-        json.dumps({"summary": stats, "results": [asdict(r) for r in results]}, indent=2)
+        json.dumps(
+            {"path": args.path, "summary": stats, "results": [asdict(r) for r in results]}, indent=2
+        )
     )
     print(f"\n  {path}")
     return 0
