@@ -17,11 +17,14 @@ The first stage has two implementations and they are not equivalent:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
 import cv2
 import numpy as np
+from editgpt_core.rle import encode as encode_rle
+from editgpt_core.spec import Grounding, MaskCandidate
 
 from editgpt_models.compositing import RGB, Mask
 from editgpt_models.config import load_thresholds
@@ -112,19 +115,91 @@ def _decode(
     return mask, iou
 
 
-def mask_from_box(
-    encoder: Any, decoder: Any, rgb: RGB, box: tuple[float, float, float, float]
-) -> Segmentation:
-    """Box prompt, in fractions of the image, to a precise mask."""
+def masks_from_boxes(
+    encoder: Any, decoder: Any, rgb: RGB, boxes: Sequence[tuple[float, float, float, float]]
+) -> list[Segmentation]:
+    """Several box prompts over one image, encoding it **once**.
+
+    The split matters: the encoder is the expensive half (~1.5 s) and the decoder is
+    nearly free, and the embedding depends only on the image. Calling `mask_from_box` in
+    a loop re-encodes per box, which turned a five-candidate request into five encoder
+    passes — measured as the difference between a 40-minute benchmark and a two-hour one.
+
+    Returns one `Segmentation` per box, in the order given.
+    """
+    if not boxes:
+        return []
+
     height, width = rgb.shape[:2]
     prepared, scale = preprocess_for_encoder(rgb, encoder)
     embedding = encoder.run(None, {encoder.get_inputs()[0].name: prepared})[0]
 
-    x0, y0, x1, y1 = box
-    coords = np.array([[[width * x0, height * y0], [width * x1, height * y1]]], dtype=np.float32)
-    labels = np.array([[2, 3]], dtype=np.float32)  # SAM encodes a box as two corners
-    mask, iou = _decode(decoder, embedding, coords, labels, (height, width), scale)
-    return Segmentation(mask=mask, confidence=iou, source="sam-box")
+    found = []
+    for x0, y0, x1, y1 in boxes:
+        coords = np.array(
+            [[[width * x0, height * y0], [width * x1, height * y1]]], dtype=np.float32
+        )
+        labels = np.array([[2, 3]], dtype=np.float32)  # SAM encodes a box as two corners
+        mask, iou = _decode(decoder, embedding, coords, labels, (height, width), scale)
+        found.append(Segmentation(mask=mask, confidence=iou, source="sam-box"))
+    return found
+
+
+def mask_from_box(
+    encoder: Any, decoder: Any, rgb: RGB, box: tuple[float, float, float, float]
+) -> Segmentation:
+    """One box prompt, in fractions of the image, to a precise mask."""
+    return masks_from_boxes(encoder, decoder, rgb, [box])[0]
+
+
+def candidates_from_phrase(
+    detector: Any,
+    encoder: Any,
+    decoder: Any,
+    rgb: RGB,
+    phrase: str,
+    *,
+    top_k: int | None = None,
+    min_score: float | None = None,
+    margin: float | None = None,
+) -> Grounding:
+    """Every region a phrase might mean, and whether we should ask before acting.
+
+    This is the answer to TD-015. Two unrelated grounding models fail on the *same* third
+    of held-out phrases, because both ground the noun and then pick an arbitrary instance;
+    no better detector fixes that, and every model that resolves relations is GPU-class.
+    Offering the alternatives does: measured on 250 held-out RefCOCOg samples, picking
+    from five takes the hit rate from **0.516 to 0.832** and mIoU from 0.469 to 0.731 —
+    the range published *trained* referring-segmentation models occupy.
+
+    Costs one encoder pass regardless of `top_k`, which is why `masks_from_boxes` exists.
+    """
+    from editgpt_models.detect import detect
+
+    tuning = load_thresholds()
+    wanted = tuning.candidates if top_k is None else top_k
+    gate = tuning.ambiguity_margin if margin is None else margin
+
+    found = detect(detector, rgb, phrase, min_score=min_score, top_k=wanted)
+    if not found:
+        return Grounding(candidates=[], ambiguous=False, margin=0.0)
+
+    segmented = masks_from_boxes(encoder, decoder, rgb, [c.box for c in found])
+    candidates = [
+        MaskCandidate(box=c.box, score=c.score, mask_ref=encode_rle(s.mask))
+        for c, s in zip(found, segmented, strict=True)
+        if s.mask.any()
+    ]
+    if not candidates:
+        return Grounding(candidates=[], ambiguous=False, margin=0.0)
+
+    spread = candidates[0].score - candidates[1].score if len(candidates) > 1 else 1.0
+    return Grounding(
+        candidates=candidates,
+        # A lone candidate is never ambiguous: there is nothing to be ambiguous between.
+        ambiguous=len(candidates) > 1 and spread < gate,
+        margin=round(min(max(spread, 0.0), 1.0), 4),
+    )
 
 
 def mask_from_phrase(

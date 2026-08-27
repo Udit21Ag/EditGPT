@@ -24,9 +24,9 @@ from editgpt_core import EditOp
 from editgpt_core.errors import ProviderError
 from editgpt_core.metrics import box_metrics, fill_metrics
 from editgpt_models.compositing import RGB, Mask
-from editgpt_models.enhance import downscale_to, upscale
-from editgpt_models.erase import flat_background_mask, make_session, recolour_background
-from editgpt_models.pipeline import Erasers, erase, prepare_mask
+from editgpt_models.enhance import downscale_to
+from editgpt_models.erase import make_session
+from editgpt_models.execute import Models, execute
 from editgpt_models.registry import model_path
 from editgpt_models.segment import load_clipseg, mask_from_phrase, mask_from_seed, seed_from_text
 from editgpt_models.slot import ModelSlot
@@ -99,6 +99,11 @@ class Context:
 def segment_for(case: Case, ctx: Context, image: Image.Image, rgb: RGB) -> tuple[Mask, str]:
     """Mask for a case, preferring text so the eval exercises the shipping path.
 
+    Returns the **raw** segmentation. Dilation is the eraser's business and `execute`
+    applies it; doing it here as well would dilate twice. It also makes `bbox_iou` measure
+    what it claims — whether grounding found the right object — rather than the footprint
+    the eraser will end up touching.
+
     Order matters and follows the measurement, not preference. Grounding DINO first: on
     250 held-out RefCOCOg samples it reaches mIoU 0.469 against CLIPSeg's 0.389, and
     matches something for every phrase where CLIPSeg found nothing 8% of the time.
@@ -110,13 +115,13 @@ def segment_for(case: Case, ctx: Context, image: Image.Image, rgb: RGB) -> tuple
     if case.target:
         seg = mask_from_phrase(ctx.detector(), encoder, decoder, rgb, case.target)
         if seg.mask.any():
-            return prepare_mask(seg.mask), f"{seg.source} ({seg.confidence:.2f})"
+            return seg.mask, f"{seg.source} ({seg.confidence:.2f})"
 
         processor, model = ctx.clipseg()
         heat = seed_from_text(processor, model, image, case.target)
         seg = mask_from_seed(encoder, decoder, rgb, heat)
         if seg.mask.any():
-            return prepare_mask(seg.mask), f"{seg.source} ({seg.confidence:.2f})"
+            return seg.mask, f"{seg.source} ({seg.confidence:.2f})"
 
     if case.box is None:
         raise ValueError(f"{case.id}: text found nothing and there is no fallback box")
@@ -137,119 +142,105 @@ def strip(source: RGB, mask: Mask, result: RGB, name: str) -> None:
     )
 
 
+def _models(ctx: Context, op: EditOp) -> Models:
+    """Load only what this operation needs.
+
+    Loading everything up front would hold four heavy models resident to run one case,
+    which the `ModelSlot` exists to prevent.
+    """
+    if op is EditOp.REMOVE:
+        return Models(migan=ctx.session("migan"), lama=ctx.session("lama"))
+    if op is EditOp.UPSCALE:
+        return Models(esrgan=ctx.session("esrgan-x2"))
+    if op is EditOp.BACKGROUND:
+        return Models()
+    provider = CloudflareWorkersAI()
+    return Models(fill=provider.fill if provider.is_configured() else None)
+
+
 def run_case(case: Case, ctx: Context) -> Result:
+    """One case, through the same dispatch the worker uses.
+
+    The golden set is the regression test for that dispatch: it drove this logic before
+    the extraction, so if the table still reads the same, the move was faithful.
+    """
     started = time.monotonic()
     image = load_image(case.path)
     rgb = np.asarray(image, dtype=np.uint8)
 
-    if case.op is EditOp.REMOVE:
-        mask, source = segment_for(case, ctx, image, rgb)
-        erasers = Erasers.from_sessions(ctx.session("migan"), ctx.session("lama"))
-        outcome = erase(erasers, rgb, mask)
-        strip(rgb, outcome.mask, outcome.image, f"{case.id}_{case.op.value}.png")
-        iou = None
-        if case.box is not None:
-            iou = float(box_metrics(mask // 255, case.box, rgb.shape[:2])["bbox_iou"])
-        return Result(
-            id=case.id,
-            prompt=case.prompt,
-            op=case.op.value,
-            status="ok",
-            seconds=round(time.monotonic() - started, 2),
-            passes=outcome.summary(),
-            kept_passes=outcome.kept_passes,
-            cost=round(outcome.cost, 1),
-            bbox_iou=iou,
-            mask_source=source,
-        )
-
+    # Upscaling is deliberately driven at a reduced size: 2x of a full frame takes
+    # minutes on CPU, so the eval measures behaviour, not patience.
     if case.op is EditOp.UPSCALE:
-        # Deliberately driven at a reduced size: 2x enhancement of a full frame takes
-        # minutes on CPU, so the eval measures behaviour, not patience.
-        small = downscale_to(rgb, UPSCALE_EVAL_SIDE)
-        enlarged = upscale(ctx.session("esrgan-x2"), small)
-        reference = cv2.resize(small, enlarged.shape[1::-1], interpolation=cv2.INTER_CUBIC).astype(
-            np.uint8
-        )
-        strip(
-            reference,
-            np.zeros(reference.shape[:2], np.uint8),
-            enlarged,
-            f"{case.id}_{case.op.value}.png",
-        )
-        sharper = _detail(enlarged) / max(_detail(reference), 1e-6)
-        return Result(
-            id=case.id,
-            prompt=case.prompt,
-            op=case.op.value,
-            status="ok",
-            seconds=round(time.monotonic() - started, 2),
-            passes=f"esrgan-x2 tiled, {small.shape[1]}x{small.shape[0]} -> "
-            f"{enlarged.shape[1]}x{enlarged.shape[0]}",
-            kept_passes=1,
-            cost=round(sharper, 2),
-            mask_source="whole image",
-            detail=f"detail vs bicubic {sharper:.2f}x",
-        )
+        rgb = downscale_to(rgb, UPSCALE_EVAL_SIDE)
 
-    if case.op is EditOp.BACKGROUND:
-        # A flat colour is compositing, not generation. Keep the subject, repaint the rest.
-        # Prefer flood-filling the backdrop over segmenting the subject: it keeps thin
-        # structures like table legs and leaves no fringe of the old colour.
-        backdrop = flat_background_mask(rgb)
-        if backdrop is not None:
-            mask = np.asarray(255 - backdrop, dtype=np.uint8)
-            source = "flood fill from the border"
-        else:
-            mask, source = segment_for(case, ctx, image, rgb)
-        result = recolour_background(rgb, mask, GREEN)
-        strip(rgb, mask, result, f"{case.id}_{case.op.value}.png")
-        return Result(
-            id=case.id,
-            prompt=case.prompt,
-            op=case.op.value,
-            status="ok",
-            seconds=round(time.monotonic() - started, 2),
-            passes="composite",
-            kept_passes=1,
-            cost=0.0,
-            mask_source=source,
-            detail="deterministic recolour, no generative call",
-        )
+    mask: Mask | None = None
+    source = "whole image"
+    if case.op is not EditOp.UPSCALE:
+        mask, source = segment_for(case, ctx, image, rgb)
 
-    # ADD and REPLACE: the reference box is the mask, standing in for a brush stroke.
-    # Both go remote — a local eraser cannot synthesise new content.
-    provider = CloudflareWorkersAI()
-    if not provider.is_configured():
+    if case.op in {EditOp.ADD, EditOp.REPLACE} and not CloudflareWorkersAI().is_configured():
         return Result(
             case.id, case.prompt, case.op.value, "skipped", detail="provider not configured"
         )
-    if case.box is None:
-        return Result(case.id, case.prompt, case.op.value, "skipped", detail="no placement box")
-
-    height, width = rgb.shape[:2]
-    x0, y0, x1, y1 = case.box
-    mask = np.zeros((height, width), np.uint8)
-    mask[round(y0 * height) : round(y1 * height), round(x0 * width) : round(x1 * width)] = 255
-
-    from editgpt_models.compositing import erase_in_place
 
     try:
-        result = erase_in_place(lambda c, m: provider.fill(c, m, case.fill), rgb, mask)
+        edit = execute(
+            _models(ctx, case.op),
+            case.op,
+            rgb,
+            mask=mask,
+            content=case.fill,
+            colour=GREEN,
+            via=CloudflareWorkersAI().name,
+        )
     except ProviderError as exc:
         return Result(case.id, case.prompt, case.op.value, "failed", detail=str(exc)[:120])
 
-    strip(rgb, mask, result, f"{case.id}_{case.op.value}.png")
+    if case.op is EditOp.UPSCALE:
+        reference = cv2.resize(rgb, edit.image.shape[1::-1], interpolation=cv2.INTER_CUBIC)
+        strip(
+            np.asarray(reference, dtype=np.uint8),
+            np.zeros(reference.shape[:2], np.uint8),
+            edit.image,
+            f"{case.id}_{case.op.value}.png",
+        )
+        sharper = _detail(edit.image) / max(_detail(np.asarray(reference, np.uint8)), 1e-6)
+        return Result(
+            id=case.id,
+            prompt=case.prompt,
+            op=case.op.value,
+            status="ok",
+            seconds=round(time.monotonic() - started, 2),
+            passes=edit.strategy,
+            kept_passes=1,
+            cost=round(sharper, 2),
+            mask_source=source,
+            detail=f"{edit.detail}; detail vs bicubic {sharper:.2f}x",
+        )
+
+    strip(rgb, edit.mask, edit.image, f"{case.id}_{case.op.value}.png")
+
+    iou = None
+    if case.box is not None and mask is not None and case.op is EditOp.REMOVE:
+        iou = float(box_metrics(mask // 255, case.box, rgb.shape[:2])["bbox_iou"])
+
+    kept = sum(1 for p in edit.passes if p["kept"]) or 1
+    cost = edit.cost
+    if case.op in {EditOp.ADD, EditOp.REPLACE}:
+        cost = round(fill_metrics(edit.image, rgb, edit.mask).cost, 1)
+
     return Result(
         id=case.id,
         prompt=case.prompt,
         op=case.op.value,
         status="ok",
         seconds=round(time.monotonic() - started, 2),
-        passes="cloudflare",
-        kept_passes=1,
-        cost=round(fill_metrics(result, rgb, mask).cost, 1),
-        mask_source="reference box (brush stand-in)",
+        passes=edit.strategy,
+        kept_passes=kept,
+        cost=round(cost, 1),
+        bbox_iou=iou,
+        mask_source=source,
+        detail=edit.detail,
     )
 
 

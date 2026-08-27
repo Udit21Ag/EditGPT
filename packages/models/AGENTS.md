@@ -11,6 +11,9 @@ Local model execution. **Importing this package must not load a model.**
 - `erase.py` — MI-GAN and LaMa, residual detection, backdrop detection.
 - `compositing.py` — crop window, chroma match, feathered paste-back.
 - `pipeline.py` — the multi-pass policy.
+- `execute.py` — **the** edit dispatch. Both the worker and the golden set call it, so a
+  change in editing behaviour shows up in `make eval` rather than only in production. Do
+  not add a second one.
 
 ## Traps that have already cost time
 
@@ -49,6 +52,17 @@ hidden** — a rejected strategy is a finding the critic loop needs.
 
 Never gate the residual pass on fill cost alone. It prefers the version that flattens the
 scene. `residual_max_growth` is structural for that reason.
+
+## Grounding returns candidates, not an answer
+
+`candidates_from_phrase` ranks every region a phrase might mean and says whether to ask.
+That is not a nicety: two unrelated grounding models fail on the _same_ third of held-out
+phrases, and letting the user pick from five takes the hit rate from 0.516 to 0.832 —
+better than any model swap available under the memory budget. See ADR-0003.
+
+**One encoder pass serves every candidate.** `masks_from_boxes` exists because
+`mask_from_box` in a loop re-encodes the image per box; five candidates cost five encoder
+passes, which is the difference between a 40-minute benchmark and a two-hour one.
 
 **`fill_metrics(...).cost` measures plausibility, not fidelity** — see TD-013. Do not
 add a decision that trusts it without checking `benchmarks/out/removal.json` first.
