@@ -186,6 +186,27 @@ def main() -> int:
         f"harness/tech_debt_tracker.md: {ident} has more than one ### section"
         for ident in sorted(repeated)
     )
+
+    # ...and that the two agree about status and priority. Reprioritising TD-004 landed in
+    # its section and not its row, which is worse than either being stale: the index and
+    # the reasoning then say different things and a reader believes whichever they opened.
+    for row in re.finditer(r"^\| (TD-\d+) \|[^|]*\| *(\w+) *\| *(P\d) *\|", debt, re.M):
+        ident, status, priority = row.groups()
+        block = re.search(
+            rf"^### {ident} —.*?^Status: *([\w ]+?) *·[^\n]*?Priority: *\**(P\d)", debt, re.M | re.S
+        )
+        if block is None:
+            continue
+        if block.group(1).strip() != status:
+            failures.append(
+                f"harness/tech_debt_tracker.md: {ident} is '{status}' in the table and "
+                f"'{block.group(1).strip()}' in its section"
+            )
+        if block.group(2) != priority:
+            failures.append(
+                f"harness/tech_debt_tracker.md: {ident} is {priority} in the table and "
+                f"{block.group(2)} in its section"
+            )
     for block in debt.split("### TD-")[1:]:
         ident = block.split("\n", 1)[0].strip()
         if ident.startswith("00N"):

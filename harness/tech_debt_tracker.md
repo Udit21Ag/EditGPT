@@ -37,7 +37,7 @@ paid. It still stays visible.
 | TD-001 | CLIPSeg runs on torch, costing ~1 GB of overhead             | open     | P2       | models     |
 | TD-002 | Cast shadows survive object removal                          | accepted | P1       | models     |
 | TD-003 | Both erasers smear geometric structure                       | open     | P2       | models     |
-| TD-004 | Mask dilation bleeds into occluding foreground               | open     | P2       | models     |
+| TD-004 | The mask swallows objects that occlude or touch the target   | open     | P1       | models     |
 | TD-005 | Background op only handles flat backdrops                    | open     | P2       | models     |
 | TD-006 | Two of seven planned operations unimplemented                | accepted | P2       | models     |
 | TD-007 | Eval quality is not diffed against main in CI                | open     | P1       | evals      |
