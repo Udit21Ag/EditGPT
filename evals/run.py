@@ -24,11 +24,18 @@ from editgpt_core import EditOp
 from editgpt_core.errors import ProviderError
 from editgpt_core.metrics import box_metrics, fill_metrics
 from editgpt_models.compositing import RGB, Mask
+from editgpt_models.config import load_thresholds
 from editgpt_models.enhance import downscale_to
 from editgpt_models.erase import make_session
 from editgpt_models.execute import Models, execute
 from editgpt_models.registry import model_path
-from editgpt_models.segment import load_clipseg, mask_from_phrase, mask_from_seed, seed_from_text
+from editgpt_models.segment import (
+    load_clipseg,
+    mask_from_phrase,
+    mask_from_seed,
+    occluder_shield,
+    seed_from_text,
+)
 from editgpt_models.slot import ModelSlot
 from editgpt_providers import CloudflareWorkersAI
 from PIL import Image
@@ -96,7 +103,9 @@ class Context:
         return self._clipseg
 
 
-def segment_for(case: Case, ctx: Context, image: Image.Image, rgb: RGB) -> tuple[Mask, str]:
+def segment_for(
+    case: Case, ctx: Context, image: Image.Image, rgb: RGB
+) -> tuple[Mask, str, Mask | None]:
     """Mask for a case, preferring text so the eval exercises the shipping path.
 
     Returns the **raw** segmentation. Dilation is the eraser's business and `execute`
@@ -110,18 +119,26 @@ def segment_for(case: Case, ctx: Context, image: Image.Image, rgb: RGB) -> tuple
     CLIPSeg is tried only when the detector abstains, because it still handles "stuff"
     nouns — sky, grass, a wall — that an object detector grounds poorly. The reference
     box is the last resort, and a case that reaches it is not testing grounding at all.
+
+    The third value is the occluder shield — neighbouring objects the eraser's dilation
+    must not reach. It is computed for removal only, and only for a model-derived mask,
+    matching the worker exactly; the golden set exists to exercise the shipping path, so
+    a difference here would make its images describe software nobody runs.
     """
     encoder, decoder = ctx.session("sam-encoder"), ctx.session("sam-decoder")
     if case.target:
         seg = mask_from_phrase(ctx.detector(), encoder, decoder, rgb, case.target)
+        if not seg.mask.any():
+            processor, model = ctx.clipseg()
+            heat = seed_from_text(processor, model, image, case.target)
+            seg = mask_from_seed(encoder, decoder, rgb, heat)
         if seg.mask.any():
-            return seg.mask, f"{seg.source} ({seg.confidence:.2f})"
-
-        processor, model = ctx.clipseg()
-        heat = seed_from_text(processor, model, image, case.target)
-        seg = mask_from_seed(encoder, decoder, rgb, heat)
-        if seg.mask.any():
-            return seg.mask, f"{seg.source} ({seg.confidence:.2f})"
+            shield = (
+                occluder_shield(encoder, decoder, rgb, seg.mask)
+                if case.op is EditOp.REMOVE and load_thresholds().shield
+                else None
+            )
+            return seg.mask, f"{seg.source} ({seg.confidence:.2f})", shield
 
     if case.box is None:
         raise ValueError(f"{case.id}: text found nothing and there is no fallback box")
@@ -129,7 +146,7 @@ def segment_for(case: Case, ctx: Context, image: Image.Image, rgb: RGB) -> tuple
     x0, y0, x1, y1 = case.box
     mask = np.zeros((height, width), np.uint8)
     mask[round(y0 * height) : round(y1 * height), round(x0 * width) : round(x1 * width)] = 255
-    return mask, "reference box"
+    return mask, "reference box", None
 
 
 def strip(source: RGB, mask: Mask, result: RGB, name: str) -> None:
@@ -174,9 +191,10 @@ def run_case(case: Case, ctx: Context) -> Result:
         rgb = downscale_to(rgb, UPSCALE_EVAL_SIDE)
 
     mask: Mask | None = None
+    shield: Mask | None = None
     source = "whole image"
     if case.op is not EditOp.UPSCALE:
-        mask, source = segment_for(case, ctx, image, rgb)
+        mask, source, shield = segment_for(case, ctx, image, rgb)
 
     if case.op in {EditOp.ADD, EditOp.REPLACE} and not CloudflareWorkersAI().is_configured():
         return Result(
@@ -189,6 +207,7 @@ def run_case(case: Case, ctx: Context) -> Result:
             case.op,
             rgb,
             mask=mask,
+            protect=shield,
             content=case.fill,
             colour=GREEN,
             via=CloudflareWorkersAI().name,
@@ -244,13 +263,29 @@ def run_case(case: Case, ctx: Context) -> Result:
     )
 
 
+REMOTE_OPS = frozenset({EditOp.ADD, EditOp.REPLACE})
+"""Operations served by Cloudflare Workers AI.
+
+Split out so CI can run the rest on every pull request. The free tier is a daily
+allowance shared with development, and a per-push spend of it is how the golden set
+stops being runnable at all — which is the state TD-007 was trying to escape, not enter.
+"""
+
+
 def main() -> int:
     load_dotenv(REPO_ROOT / ".env")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("ids", nargs="*", help="case ids; default is every runnable case")
+    parser.add_argument(
+        "--local-only",
+        action="store_true",
+        help="skip cases that call a remote provider, which spend free-tier quota",
+    )
     args = parser.parse_args()
 
     cases = [c for c in load() if not args.ids or c.id in args.ids]
+    if args.local_only:
+        cases = [c for c in cases if c.op not in REMOTE_OPS]
     if not cases:
         print("no matching cases", file=sys.stderr)
         return 2

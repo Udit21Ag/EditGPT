@@ -44,6 +44,16 @@ For user-facing behaviour, verify the actual workflow, not its parts. For this p
 the end-to-end check is the golden set (`make eval`), which exercises grounding, routing,
 editing, compositing and scoring together.
 
+**Diff it; do not read it.** `make eval-diff` compares a run against `evals/baseline.json`
+and CI does the same on every pull request. Record a new baseline with `make eval-baseline`
+only after looking at the pictures — the baseline is an assertion that the current output
+is acceptable, so updating it to make a diff go away is the one way to defeat the check.
+
+**Trust the images over the numbers.** `cost` is a photometric proxy this project has
+measured as unreliable (TD-017), and TD-004 is the worked example: a change that visibly
+ruined `i8` moved cost 3.2% and moved the result thumbnail 0.400. A clean diff is not
+evidence the pictures are fine; a flagged case is an instruction to open one.
+
 ## Regression tests
 
 Every meaningful bug fix gets a test that fails before the fix. Name the incident:

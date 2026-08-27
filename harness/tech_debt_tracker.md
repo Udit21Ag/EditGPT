@@ -40,7 +40,7 @@ paid. It still stays visible.
 | TD-004 | The mask swallows objects that occlude or touch the target   | open     | P1       | models     |
 | TD-005 | Background op only handles flat backdrops                    | open     | P2       | models     |
 | TD-006 | Two of seven planned operations unimplemented                | accepted | P2       | models     |
-| TD-007 | Eval quality is not diffed against main in CI                | open     | P1       | evals      |
+| TD-007 | Eval quality is not diffed against main in CI                | resolved | P1       | evals      |
 | TD-008 | Add-mask plausibility is unchecked                           | open     | P2       | providers  |
 | TD-009 | Visible transition artifact at the mask boundary             | open     | P2       | models     |
 | TD-010 | Upscaling is too slow to be interactive                      | accepted | P2       | models     |
@@ -54,7 +54,7 @@ paid. It still stays visible.
 | TD-015 | Relational referring expressions are not grounded at all     | resolved | P1       | models     |
 | TD-016 | Recorded result dimensions assume the edit preserves them    | resolved | P2       | store      |
 | TD-020 | The background colour is fixed green, not requested          | open     | P2       | models     |
-| TD-021 | Edits come back at 2048 px, not the uploaded resolution      | open     | P1       | worker     |
+| TD-021 | Edits come back at 2048 px, not the uploaded resolution      | resolved | P1       | worker     |
 | TD-022 | A provider's blank frame was composited as a result          | resolved | P1       | providers  |
 
 ---
@@ -131,12 +131,47 @@ grounding made a latent defect legible, which is what better grounding is for.
 **Trigger:** already fired.
 **Workaround:** none. Every quality number in the eval table looks fine for these cases;
 only the images show it.
-**Resolution:** suppress the mask across boundaries the segmenter assigns to a different
-instance — an occlusion edge is not a background edge. SAM's multi-mask output carries
-some of this; a second prompt point on the occluder is the cheaper experiment.
 
-**Resolution:** suppress dilation across boundaries the segmenter assigns to a different
-instance. An occlusion edge is not a background edge.
+**Attempted 2026-08-28 and not adopted — `segment.occluder_shield`, off behind
+`Thresholds.shield`.** The experiment above was run. It works as designed and still makes
+the product worse, which is worth recording in full because the next person will have the
+same idea.
+
+The shield probes SAM with point prompts across the band dilation would reach, every
+probe *outside* the target, and withholds any returned region that is coherent, bounded,
+and mostly not the target. Measured on the golden set:
+
+- `i8`: the jumper's shoe goes from 10.3% erased to 0.5%. The shoe is visibly intact.
+- `i4`: unchanged — the horse keeps all of itself.
+- `i6`: cost 28.5 -> 15.0, a clear improvement.
+- `i8` **overall: worse.** A pale ghost of the tower's base is left standing, and it is
+  far more visible than the smeared shoe it prevents.
+
+**What that revealed is the real finding.** Dilation had been silently compensating for
+SAM *under*-segmenting an object where it meets clutter. Withhold the ring where the
+tower meets the tree line and the compensation goes with it. The bleed and the
+under-segmentation are the same 5% of slack doing two jobs, and removing the slack from
+one job removes it from both. Occluder detection is not the missing piece; a mask that is
+right at the boundary is.
+
+**Two things measured along the way, both worth not re-deriving:**
+
+- *SAM is part-aware.* A probe near a horse's edge returns **the leg** — small, confident,
+  low IoU against the whole horse. Filtering on size or IoU shields a quarter of the
+  animal from its own erasure. Containment is the test that separates a part from an
+  occluder, at 0.30; at the 0.80 first tried, the horse regression returns.
+- *Probing is affordable.* Skipping probe points already covered by an earlier probe's
+  region turns an 8 px grid into ~30 decoder calls and 0.8 s, because one probe on the
+  sky explains all of the sky.
+
+**Still unfixed and out of reach here:** an occluder *inside* the silhouette — the glove
+gripping the bat in `i9`, which SAM folds into the bat. Outward probing cannot see it,
+and probing inward is what caused the horse regression. Separating the two needs the mask
+hierarchy of MobileSAM's **multi-mask decoder**; the export in the registry is
+single-mask, so this is a model-swap experiment, not a threshold.
+**Resolution:** fix the under-segmentation at the object boundary — a mask that does not
+need 5% of slack to look right is the thing that makes shielding safe. Then re-enable
+`Thresholds.shield`, which is tested and waiting.
 
 ### TD-005 — Background op only handles flat backdrops
 
@@ -166,7 +201,7 @@ availability and may never be free.
 
 ### TD-007 — Eval quality is not diffed against main in CI
 
-Status: open · Priority: P1 · Identified: 2026-08-26 · Area: `evals`
+Status: resolved · Priority: P1 · Identified: 2026-08-26 · Resolved: 2026-08-28 · Area: `evals`
 **Problem:** `make eval` runs locally and by hand. Nothing compares a branch's quality
 against `main` automatically.
 **Why it matters:** quality regressions are invisible until someone thinks to look. This
@@ -175,8 +210,36 @@ undercuts the whole point of having a golden set.
 **Why deferred:** it consumes real free-tier provider quota per run, so it cannot go on
 every push without a budget decision.
 **Trigger:** any quality regression that reaches `main`.
-**Resolution:** run the local-only subset per PR and comment the diff; keep provider
-cases nightly.
+**Resolved 2026-08-28.** `evals/diff.py` compares a run against a committed
+`evals/baseline.json`; the `eval` job in `check.yml` runs `make eval-local` on every pull
+request, comments the diff, and uploads the images as an artifact. `make eval-baseline`
+records a new baseline once a human has looked at the pictures.
+
+**What blocks and what only reports, and why the split is not arbitrary.** A case that
+stopped working, a case that vanished from the run, and a drop in grounding IoU all
+block: each has a right answer. A cost move only reports. That is this project's own
+measurement talking — TD-017 has two paired benchmarks disagreeing on the *sign* of
+cost's correlation with visual quality, and TD-004 supplied the sharpest example yet: the
+occluder shield moved `i8` by +1.8 cost while visibly ruining it and moved `i6` by -13.5
+while improving it. Gating on that number would be a coin toss wearing a lab coat.
+
+**Cost alone would not have caught the thing that motivated this.** The `i8` regression
+moved it 3.2%, under any tolerance wide enough to be usable. So the baseline also carries
+a 32x32 thumbnail of each result pane, and the diff reports when the picture moves: `i8`
+scored 0.400 against 0.000 between two runs of unchanged code.
+
+**That thumbnail is only usable because the local half of the golden set is bit-exact.**
+Measured, not assumed — two runs of identical code gave the same cost to the decimal for
+all eleven removals and pixel-identical images. There is no reproducibility noise to
+leave headroom for, which is why the cost tolerance came down from a guessed 15% to 5%.
+The remaining unknown is the *cross-machine* floor: a CI worker has a different CPU and
+ONNX Runtime build, and that has not been measured yet. Both the image and cost checks
+therefore only report; a tolerance that turns out too tight costs a line in a comment
+rather than a red build. Tighten them once CI has run enough times to show its floor.
+
+**This does not make looking at the images unnecessary.** It routes attention to them.
+**The generative cases stay out of CI.** They spend a daily free-tier allowance shared
+with development; per-push spend of it is what would make the golden set unrunnable.
 
 ### TD-008 — Add-mask plausibility is unchecked
 
@@ -444,7 +507,7 @@ not exist yet; a colour table here would be the wrong home for it.
 
 ### TD-021 — Edits come back at 2048 px, not the uploaded resolution
 
-Status: open · Priority: P1 · Identified: 2026-08-27 · Area: `apps/worker`
+Status: resolved · Priority: P1 · Identified: 2026-08-27 · Resolved: 2026-08-28 · Area: `apps/worker`
 **Problem:** the worker downscales to 2048 px on the longest side before editing, so a
 15.9 MP upload returns at ~3 MP.
 **Why it matters:** a visible product decision wearing an implementation detail's clothes.
@@ -453,9 +516,23 @@ Nobody asked for their photograph to be shrunk, and the API does not say it happ
 erase is minutes of model work, and the multi-pass loop runs an eraser up to three times.
 **Workaround:** none.
 **Trigger:** any user who downloads a result.
-**Resolution:** edit the crop at full resolution and paste back into the original — the
-compositor already works that way for the region it touches, so the machinery exists.
-Until then the response should at least declare the size it returns.
+**Resolved 2026-08-28** by `compositing.reproject`, and not by editing at full
+resolution. Two knobs had been collapsed into one: `MAX_SIDE` now bounds the *work* and
+no longer bounds the *answer*. The edit still runs at 2048 px; the finished result is
+blended onto the full-resolution original, where the alpha is zero outside the mask so
+the untouched pixels are the original's own rather than a downscale-and-upscale of them.
+
+**Resampling the edit up loses nothing**, which is what makes this cheap rather than a
+trade. Every fill in the pipeline is generated at `CROP_SIZE` (512) and enlarged to the
+crop window already, so the model's output carries the same detail either way. What the
+bounded return had actually been discarding was the ~90% of the photograph that was never
+edited.
+
+**Editing at full resolution was the obvious fix and is the wrong one:** `fill_metrics`
+runs two full-frame colour conversions and a 60 px dilation *per pass*, so it would have
+put the multi-pass loop on the megapixel count for no visible gain.
+**`UPSCALE` stays bounded on both sides** — its purpose is to enlarge, so a 15.9 MP input
+would ask Real-ESRGAN for a 63 MP output and meet the RSS ceiling first.
 
 ### TD-022 — A provider's blank frame was composited as a result
 

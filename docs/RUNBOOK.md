@@ -179,9 +179,17 @@ Edit`. `/user/tokens/verify` only says the token exists.
 
 ```bash
 make eval                    # every runnable case
+make eval-local              # skips the cases that spend provider quota
 uv run python -m evals.run i1 i6c   # a subset
+make eval-diff               # compare the last run against the baseline
+make eval-baseline           # accept the last run as the new baseline
 make memory                  # RSS tier, needs weights
 ```
 
 `evals/out/report.json` is the machine-readable result; the PNG strips are
 `original | mask | result`.
+
+`evals/baseline.json` is what CI diffs against, and it holds the local cases only — the
+generative ones return a different picture every call, so baselining them would record
+noise and report it as change forever. Update it with `make eval-baseline` **after**
+looking at the images: it asserts that the current output is acceptable.

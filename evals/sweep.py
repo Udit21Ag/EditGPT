@@ -24,6 +24,7 @@ import numpy as np
 from editgpt_core import EditOp
 from editgpt_core.metrics import box_metrics, fill_metrics
 from editgpt_models.pipeline import Erasers, erase
+from PIL import Image
 
 from evals.cases import Box, Case, load
 from evals.run import OUT_DIR, Context, load_image, segment_for, strip
@@ -42,8 +43,13 @@ class Variant:
     passes: str
 
 
-def _mask_for(case: Case, ctx: Context, image: object, rgb: np.ndarray) -> tuple[np.ndarray, str]:
-    return segment_for(case, ctx, image, rgb)
+def _mask_for(
+    case: Case, ctx: Context, image: Image.Image, rgb: np.ndarray
+) -> tuple[np.ndarray, str]:
+    """The mask alone. The sweep varies grounding, so the occluder shield — which is
+    computed *from* a mask and is off by default — is not part of what it measures."""
+    mask, source, _shield = segment_for(case, ctx, image, rgb)
+    return mask, source
 
 
 def run_variant(base: Case, ctx: Context, *, target: str | None, box: Box | None) -> Variant:

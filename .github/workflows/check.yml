@@ -82,6 +82,85 @@ jobs:
           name: coverage
           path: coverage.xml
 
+  # TD-007. `make eval` produced a table nobody diffed, which is how a black
+  # safety-filter frame, a swallowed shoe and a smeared hand all reached a human rather
+  # than a check. The generative cases are excluded: they spend a daily free-tier
+  # allowance shared with development, and burning it per push would make the golden set
+  # unrunnable — the state this was meant to escape, not enter.
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - run: uv python install 3.12
+      - run: uv sync --all-extras --frozen
+
+      # ~550 MB of ONNX weights. Keyed on the registry so a change to a model URL or
+      # checksum fetches fresh rather than serving a stale file under a new name.
+      - name: Cache model weights
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/editgpt/models
+          key: models-${{ hashFiles('packages/models/src/editgpt_models/registry.py') }}
+
+      - name: Golden set (local operations only)
+        run: make eval-local
+
+      - name: Diff against the baseline
+        id: diff
+        run: |
+          {
+            echo 'report<<GOLDEN'
+            make eval-diff || echo "__BLOCKING__"
+            echo GOLDEN
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-images
+          path: evals/out
+
+      # The images are the arbiter, so the comment's job is to say which ones to open.
+      - uses: actions/github-script@v7
+        if: always()
+        with:
+          script: |
+            const body = `### Golden set\n\n${{ toJSON(steps.diff.outputs.report) }}\n\n`
+              + `Images are attached to this run as \`eval-images\`. `
+              + `Cost is a proxy this project has measured as unreliable (TD-017) — `
+              + `open the picture before trusting the number.`;
+            const { data: comments } = await github.rest.issues.listComments({
+              ...context.repo, issue_number: context.issue.number,
+            });
+            const mine = comments.find(c => c.user.type === 'Bot' && c.body.startsWith('### Golden set'));
+            if (mine) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });
+            }
+
+      # Through the environment rather than `${{ }}` in the script: the report is
+      # multi-line, and expanding it inline would both break the shell and hand any
+      # future report text a way into it.
+      - name: Fail on a blocking change
+        env:
+          REPORT: ${{ steps.diff.outputs.report }}
+        run: |
+          case "$REPORT" in
+            *__BLOCKING__*) echo "blocking quality change; see the comment above"; exit 1 ;;
+          esac
+
   web:
     runs-on: ubuntu-latest
     timeout-minutes: 15

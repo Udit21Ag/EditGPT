@@ -66,6 +66,15 @@ memory:  ## The RSS regression tier, including the real-model run
 eval:  ## Run the golden image set and print the quality table
 	$(PY) python -m evals.run
 
+eval-local:  ## The golden set minus the cases that spend provider quota
+	$(PY) python -m evals.run --local-only
+
+eval-diff:  ## Compare the last eval run against the recorded baseline
+	$(PY) python -m evals.diff
+
+eval-baseline:  ## Record the last eval run as the baseline, after looking at the images
+	$(PY) python -m evals.diff --update
+
 bench-grounding:  ## Held-out grounding on RefCOCOg (real mask IoU)
 	$(PY) python -m benchmarks.grounding --limit 250 --path detector
 
