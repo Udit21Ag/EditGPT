@@ -55,6 +55,7 @@ paid. It still stays visible.
 | TD-016 | Recorded result dimensions assume the edit preserves them    | resolved | P2       | store      |
 | TD-020 | The background colour is fixed green, not requested          | open     | P2       | models     |
 | TD-021 | Edits come back at 2048 px, not the uploaded resolution      | open     | P1       | worker     |
+| TD-022 | A provider's blank frame was composited as a result          | resolved | P1       | providers  |
 
 ---
 
@@ -105,17 +106,34 @@ limitation, not a bug.
 **Trigger:** a structure-aware inpainter that fits the memory budget.
 **Resolution:** unclear. Possibly line-segment detection to condition the fill.
 
-### TD-004 — Mask dilation bleeds into occluding foreground
+### TD-004 — The mask swallows objects that occlude or touch the target
 
-Status: open · Priority: P2 · Identified: 2026-08-25 · Area: `packages/models`
-**Problem:** dilation treats every mask boundary as a background boundary, so it eats
-into objects standing in front of the target.
-**Why it matters:** silently damages content the user did not ask to change — the worst
-class of defect, because it is not where they are looking.
-**Trigger:** any report of unintended damage near an edit.
-**Workaround:** none.
-**Why deferred:** found late in Phase 0; the fix needs instance information the mask
-does not currently carry.
+Status: open · Priority: **P1** (was P2) · Identified: 2026-08-25 · Updated: 2026-08-27 · Area: `packages/models`
+**Problem:** the mask covers things the user did not name. Two mechanisms compound:
+SAM returns a *solid silhouette* for a box prompt, so anything overlapping the target is
+inside it; and dilation then treats every boundary as a background boundary and widens
+further into whatever stands in front.
+**Why it matters:** it silently damages content nobody asked to change — the worst class
+of defect, because it is not where the user is looking.
+**Observed on the golden set, 2026-08-27**, and reported by eye rather than by any metric:
+
+- **i8** "remove the Eiffel Tower" — the mask is a solid tower silhouette, and the jumping
+  figure's shoe sits inside it. The shoe is erased with the tower.
+- **i9** "remove the cricket bat" — the mask traces the bat *and* the glove gripping it.
+  The batsman's hand is erased.
+
+**Raised to P1** because it is now the most visible remaining defect in the product, and
+because it is the failure a user notices immediately.
+**Made more visible by ADR-0002, not caused by it.** A tighter detector box gives SAM a
+stronger prompt, so the silhouette it fills is more complete — including the occluders.
+The previous heatmap seed produced a patchier mask that happened to spare them. Better
+grounding made a latent defect legible, which is what better grounding is for.
+**Trigger:** already fired.
+**Workaround:** none. Every quality number in the eval table looks fine for these cases;
+only the images show it.
+**Resolution:** suppress the mask across boundaries the segmenter assigns to a different
+instance — an occlusion edge is not a background edge. SAM's multi-mask output carries
+some of this; a second prompt point on the occluder is the cheaper experiment.
 
 **Resolution:** suppress dilation across boundaries the segmenter assigns to a different
 instance. An occlusion edge is not a background edge.
@@ -438,3 +456,24 @@ erase is minutes of model work, and the multi-pass loop runs an eraser up to thr
 **Resolution:** edit the crop at full resolution and paste back into the original — the
 compositor already works that way for the region it touches, so the machinery exists.
 Until then the response should at least declare the size it returns.
+
+### TD-022 — A provider's blank frame was composited as a result
+
+Status: resolved · Priority: P1 · Identified: 2026-08-27 · Resolved: 2026-08-27 · Area: `packages/providers`
+**Problem:** Stable Diffusion returns an all-black frame when its safety checker fires —
+a 200 response carrying no generation. The compositor pasted it, and the job reported
+`ok`. On the golden set's `i3` this stamped a **black rectangle on a face** and recorded a
+completed edit.
+**Why it mattered:** the project's rule is that returning the input unchanged looks like
+success. This was worse: it looked like a deliberate edit. Nothing in the pipeline
+disagreed — the fill cost rose from 75 to 196 and the case still printed `ok`, because
+cost has no opinion about whether an image exists.
+**Found by looking at the output image.** No number caught it, which is the third time in
+this project a metric has agreed with something a human immediately saw was wrong.
+**Resolution:** the provider now refuses a return that is both near-black and near-flat
+inside the mask, raising `ProviderError` so the chain fails over and the job reports
+honestly. Thresholds calibrated on real returns: a correct fill measured mean 122.5 with
+per-channel spread 61.7; the failure measured 11.3 and 6.7 after compositing. Both
+conditions are required, because darkness alone is not a fault — `i4r` measured mean 37.2
+and was correct.
+**Confirmed transient:** the identical call minutes later produced a correct moustache.

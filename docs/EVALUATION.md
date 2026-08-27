@@ -94,6 +94,22 @@ SSIM-vs-ground-truth on **two** independent paired datasets.
 router. A correlation that appears on RemovalBench and not on RORD is a property of
 RemovalBench.
 
+## A number cannot tell you the image is missing
+
+`i3` once came back with a **black rectangle stamped on a face**, and the eval printed
+`ok`. The fill cost rose from 75 to 196 — a signal, if anyone had been reading it as one —
+and nothing else objected, because none of these metrics has an opinion about whether an
+image exists. It was caught by looking at the picture.
+
+That is the third time here a metric has agreed with something a human saw was wrong. The
+lesson is not "add a blackness metric": the provider now refuses a blank return outright
+(TD-022), which is a *guard*, not a score. **Guards belong where the failure happens;
+metrics rank things that are all basically valid.** Confusing the two produces a scoreboard
+that grades a missing image.
+
+The same session, `i8` and `i9` were flagged by eye for erasing a shoe and a hand along
+with the target. Every number for both cases looked healthy. See TD-004.
+
 ## What we can and cannot measure
 
 - **Our own fixtures have no paired ground truth.** For removal there is no "correct"
@@ -102,6 +118,8 @@ RemovalBench.
   scene with and without the object, and SSIM and PSNR are valid on it.
 - Do not report FID on 18 images.
 - **Shadows.** No metric detects a surviving cast shadow. It is caught by eye.
+- **Neither does any metric detect the mask swallowing a bystander.** TD-004 was found by
+  looking at two strips, not by a column moving.
 - **Identity drift** on additions is observed, not measured.
 - **Human evaluation** has not been run. When it is: blind A/B, ≥5 raters, a fixed
   criterion per question, and report inter-rater agreement or do not report at all.

@@ -20,6 +20,12 @@ local erasers, so comparing lanes compares models rather than plumbing. Keep it 
 - SD-1.5 is mask+prompt, not instruction-following: the prompt must describe what _should
   be there_. Translating an instruction into that is the IntentAgent's job.
 
+**A 200 is not a result.** Stable Diffusion returns an all-black frame when its safety
+checker fires, and the compositor will happily paste it onto a user's photograph and
+report the job done. Every provider must refuse a return that carries no image; the
+thresholds in `cloudflare.py` are calibrated on real ones, and darkness alone is not the
+test — a legitimate fill of a shadow measured mean 37.
+
 Add a provider by implementing the `Provider` protocol and putting it in the chain. The
 circuit breaker treats quota exhaustion and transient faults alike — they return the same
 HTTP shape, so back off and probe again rather than trying to tell them apart.

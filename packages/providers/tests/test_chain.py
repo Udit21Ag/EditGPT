@@ -107,3 +107,71 @@ def test_cloudflare_reports_missing_configuration_with_the_permissions_needed() 
     assert not provider.is_configured()
     with pytest.raises(ProviderError, match="Workers AI Edit"):
         provider.fill(image(), mask(), "a hat")
+
+
+# ---------------------------------------------------------------- blank returns
+
+
+class TestBlankFills:
+    """A 200 carrying a black frame must not be composited as a result.
+
+    Stable Diffusion returns black when its safety checker fires. This happened once on
+    the golden set — a black rectangle stamped on a face, reported as a completed edit —
+    and the identical call minutes later produced a correct moustache. Transient, silent
+    and destructive.
+
+    The thresholds below are the ones measured on that incident and on correct fills, so
+    these fixtures are calibrated rather than invented.
+    """
+
+    def image(self, value: int = 128) -> np.ndarray:
+        generator = np.random.default_rng(seed=5)
+        base = generator.integers(value - 40, value + 40, (64, 64, 3))
+        return np.asarray(np.clip(base, 0, 255), dtype=np.uint8)
+
+    def mask(self) -> np.ndarray:
+        mask = np.zeros((64, 64), np.uint8)
+        mask[16:48, 16:48] = 255
+        return mask
+
+    def test_an_all_black_frame_is_refused(self) -> None:
+        from editgpt_providers.cloudflare import _reject_blank
+
+        with pytest.raises(ProviderError, match="blank fill"):
+            _reject_blank(np.zeros((64, 64, 3), np.uint8), self.mask())
+
+    def test_the_message_says_what_to_do_next(self) -> None:
+        from editgpt_providers.cloudflare import _reject_blank
+
+        with pytest.raises(ProviderError, match="retry or rephrase"):
+            _reject_blank(np.zeros((64, 64, 3), np.uint8), self.mask())
+
+    def test_a_real_fill_is_accepted(self) -> None:
+        """Measured on the live provider: mean 122.5, spread 61.7 inside the mask."""
+        from editgpt_providers.cloudflare import _reject_blank
+
+        _reject_blank(self.image(122), self.mask())
+
+    def test_a_legitimately_dark_fill_is_accepted(self) -> None:
+        """Darkness alone is not a fault. The golden set's `i4r` measured mean 37.2 and
+        was a correct result; rejecting on brightness would have thrown it away."""
+        from editgpt_providers.cloudflare import _reject_blank
+
+        _reject_blank(self.image(37), self.mask())
+
+    def test_only_the_masked_region_decides(self) -> None:
+        """The model returns the whole frame. A dark *background* with a real fill in the
+        mask is a normal night-time photograph, not a failure."""
+        from editgpt_providers.cloudflare import _reject_blank
+
+        frame = np.zeros((64, 64, 3), np.uint8)
+        frame[16:48, 16:48] = self.image(120)[16:48, 16:48]
+        _reject_blank(frame, self.mask())
+
+    def test_a_blank_frame_with_no_mask_is_still_refused(self) -> None:
+        """Falling back to the whole frame keeps the check meaningful when the caller
+        passes an empty mask rather than skipping it silently."""
+        from editgpt_providers.cloudflare import _reject_blank
+
+        with pytest.raises(ProviderError):
+            _reject_blank(np.zeros((64, 64, 3), np.uint8), np.zeros((64, 64), np.uint8))

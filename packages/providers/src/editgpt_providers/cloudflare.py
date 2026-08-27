@@ -30,6 +30,24 @@ MODEL = "@cf/runwayml/stable-diffusion-v1-5-inpainting"
 ENDPOINT = "https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/{model}"
 DEFAULT_NEGATIVE = "blurry, distorted, watermark, text"
 
+BLANK_MEAN = 16.0
+BLANK_SPREAD = 8.0
+"""When a 200 response is not a generation.
+
+Stable Diffusion returns a **black frame** when its safety checker fires — a successful
+HTTP call carrying nothing. Composited, that is a black rectangle stamped on a user's
+photograph, reported as a completed edit. It happened once on the golden set's `i3`, on a
+prompt asking for a moustache, and the identical call a few minutes later produced a
+correct result. So it is transient, silent and destructive: exactly the combination that
+has to be caught rather than watched for.
+
+Calibrated on real returns rather than chosen. A correct fill measured mean 122.5 with a
+per-channel spread of 61.7 inside the mask; the failure measured 11.3 and 6.7 after
+compositing, and would be nearer zero before it. Both conditions must hold, because
+darkness alone is not a fault — a legitimate fill of a shadow measured mean 37.2, and a
+generation of *any* kind carries far more texture than this.
+"""
+
 
 def _png(array: np.ndarray, mode: str) -> bytes:
     buffer = BytesIO()
@@ -93,4 +111,25 @@ class CloudflareWorkersAI:
         out = Image.open(BytesIO(response.content)).convert("RGB")
         if out.size != (width, height):
             out = out.resize((width, height), Image.Resampling.LANCZOS)
-        return np.array(out, dtype=np.uint8)
+        filled = np.array(out, dtype=np.uint8)
+
+        _reject_blank(filled, mask)
+        return filled
+
+
+def _reject_blank(filled: RGB, mask: Mask) -> None:
+    """Refuse a 200 that carries no image.
+
+    Raising is the whole point. Returning this would composite a black rectangle onto a
+    photograph and report the job as done — the failure mode the project's own rule about
+    silence exists for, in its worst form: it does not merely look like success, it looks
+    like a deliberate edit.
+    """
+    inside = mask > 0
+    region = filled[inside] if inside.any() else filled.reshape(-1, 3)
+    if region.size and region.mean() < BLANK_MEAN and region.std(axis=0).max() < BLANK_SPREAD:
+        raise ProviderError(
+            f"the model returned a blank fill (mean {region.mean():.1f}, spread "
+            f"{region.std(axis=0).max():.1f}), which is what Stable Diffusion sends when "
+            "its safety checker fires. Nothing was generated; retry or rephrase."
+        )
