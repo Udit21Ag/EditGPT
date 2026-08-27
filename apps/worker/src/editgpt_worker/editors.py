@@ -42,7 +42,11 @@ SLOT = ModelSlot()
 """One per worker process. Celery runs `--concurrency=1`, so one slot is one worker."""
 
 GREEN = (46, 160, 67)
-"""The stand-in backdrop colour until the request carries one. TD-020."""
+"""The backdrop used when a request does not name one.
+
+It was once the *only* backdrop, whatever was asked for (TD-020): "change the background
+to blue" returned green and reported success. `EditSpec.colour` now carries the answer,
+and this is what a request that declines to give one gets."""
 
 MAX_SIDE = 2048
 """Longest side an edit is *computed* at. The result is returned at the uploaded size.
@@ -278,7 +282,7 @@ def edit(source: bytes, spec: EditSpec) -> Edited:
         mask=region.mask,
         protect=region.protect,
         content=spec.content,
-        colour=GREEN,
+        colour=spec.rgb_colour(GREEN),
     )
 
     # `UPSCALE` produces its own geometry and is deliberately left at the working size;

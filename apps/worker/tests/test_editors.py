@@ -430,3 +430,34 @@ def test_upscale_is_exempt_from_reprojection(captured: dict[str, Any]) -> None:
     the RSS ceiling long before it produced a picture."""
     made = editors.edit(png(4000, 3000), spec(EditOp.UPSCALE, target=None, width=4000, height=3000))
     assert max(made.width, made.height) == editors.MAX_SIDE
+
+
+# ---------------------------------------------------------------- backdrop colour
+
+
+def test_the_requested_backdrop_colour_reaches_the_compositor(captured: dict[str, Any]) -> None:
+    """TD-020: `BACKGROUND` painted the same green whatever was asked for, and reported
+    success. The failure was silent, which is what made it worth a contract field."""
+    request = EditSpec(
+        op=EditOp.BACKGROUND,
+        image_ref=AssetRef(
+            bucket="local", sha256="a" * 64, width=64, height=48, content_type="image/png"
+        ),
+        mask_source=MaskSource.WHOLE,
+        colour="#3366ff",
+    )
+    editors.edit(png(), request)
+    assert captured["colour"] == (0x33, 0x66, 0xFF)
+
+
+def test_a_request_with_no_colour_still_gets_one(captured: dict[str, Any]) -> None:
+    request = EditSpec(
+        op=EditOp.BACKGROUND,
+        image_ref=AssetRef(
+            bucket="local", sha256="a" * 64, width=64, height=48, content_type="image/png"
+        ),
+        mask_source=MaskSource.WHOLE,
+        content="a green wall",
+    )
+    editors.edit(png(), request)
+    assert captured["colour"] == editors.GREEN

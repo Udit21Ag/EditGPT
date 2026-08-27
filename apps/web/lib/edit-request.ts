@@ -29,6 +29,15 @@ export interface OperationSpec {
   readonly acceptsTarget: boolean;
   /** Whether a phrase describing what to put there is required. */
   readonly needsContent: boolean;
+  /**
+   * Whether what goes there is a *colour* rather than a description.
+   *
+   * `background` composites a flat backdrop rather than generating one (TD-005), so a
+   * colour input says exactly what it will do. Asking for free text here was worse than
+   * imprecise: until `EditSpec.colour` existed nothing read the answer, and typing
+   * "a blue background" produced green and reported success (TD-020).
+   */
+  readonly picksColour: boolean;
   /** Placeholder for the target field, which differs a lot by operation. */
   readonly targetHint: string;
   readonly contentHint: string;
@@ -38,6 +47,7 @@ export const OPERATIONS: readonly OperationSpec[] = [
   {
     op: "remove",
     label: "Remove",
+    picksColour: false,
     requiresTarget: true,
     acceptsTarget: true,
     needsContent: false,
@@ -47,6 +57,7 @@ export const OPERATIONS: readonly OperationSpec[] = [
   {
     op: "replace",
     label: "Replace",
+    picksColour: false,
     requiresTarget: true,
     acceptsTarget: true,
     needsContent: true,
@@ -56,6 +67,7 @@ export const OPERATIONS: readonly OperationSpec[] = [
   {
     op: "add",
     label: "Add",
+    picksColour: false,
     requiresTarget: true,
     acceptsTarget: true,
     needsContent: true,
@@ -67,6 +79,7 @@ export const OPERATIONS: readonly OperationSpec[] = [
     // subject is the fallback for when the border is not a uniform backdrop (TD-005).
     op: "background",
     label: "Background",
+    picksColour: true,
     requiresTarget: false,
     acceptsTarget: true,
     needsContent: true,
@@ -76,6 +89,7 @@ export const OPERATIONS: readonly OperationSpec[] = [
   {
     op: "upscale",
     label: "Upscale",
+    picksColour: false,
     requiresTarget: false,
     acceptsTarget: false,
     needsContent: false,
@@ -100,6 +114,8 @@ export interface Draft {
   readonly imageSha256: string;
   readonly target: string;
   readonly content: string;
+  /** `#rrggbb`, for the operations that paint one. */
+  readonly colour: string;
 }
 
 /** Whether the form is complete enough to send. Mirrors `EditSpec`'s own rules. */
@@ -107,7 +123,9 @@ export function ready(draft: Draft): boolean {
   const spec = specFor(draft.op);
   if (draft.imageSha256.length === 0) return false;
   if (spec.requiresTarget && draft.target.trim().length === 0) return false;
-  if (spec.needsContent && draft.content.trim().length === 0) return false;
+  // A colour is a complete answer to "what goes there", so it satisfies the same rule.
+  if (spec.needsContent && !spec.picksColour && draft.content.trim().length === 0) return false;
+  if (spec.picksColour && !/^#[0-9a-fA-F]{6}$/.test(draft.colour)) return false;
   return true;
 }
 
@@ -135,6 +153,7 @@ export function buildJob(draft: Draft, mask: MaskPayload | null): CreateJob {
   };
   if (target.length > 0) request.target = target;
   if (draft.content.trim().length > 0) request.content = draft.content.trim();
+  if (specFor(draft.op).picksColour) request.colour = draft.colour.toLowerCase();
   if (mask !== null) request.mask = mask;
   return request;
 }

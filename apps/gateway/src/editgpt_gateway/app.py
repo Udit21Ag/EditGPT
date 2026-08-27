@@ -140,6 +140,10 @@ class JobRequest(BaseModel):
     mask_source: MaskSource = MaskSource.TEXT
     target: str | None = None
     content: str | None = None
+    colour: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    """The backdrop colour for `BACKGROUND`, as `#rrggbb`. Validated here as well as on
+    `EditSpec` so a malformed value is a 422 naming the field rather than a generic one."""
+
     mask: MaskPayload | None = None
     editor: str = Field(default="default", pattern=r"^[a-z][a-z0-9_]{0,31}$")
     """Which editor the worker should run. Constrained to a slug because it is used as a
@@ -498,6 +502,7 @@ def _to_spec(svc: Services, body: JobRequest) -> EditSpec:
             mask_source=body.mask_source,
             target=body.target,
             content=body.content,
+            colour=body.colour,
             mask_ref=(
                 MaskRef(width=body.mask.width, height=body.mask.height, counts=body.mask.counts)
                 if body.mask is not None

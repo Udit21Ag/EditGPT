@@ -145,6 +145,8 @@ export interface CreateJob {
   image_sha256: string;
   target?: string;
   content?: string;
+  /** Backdrop colour for `background`, as `#rrggbb`. */
+  colour?: string;
   mask_source?: string;
   mask?: MaskPayload;
   editor?: string;

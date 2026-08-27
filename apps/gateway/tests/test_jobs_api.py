@@ -377,3 +377,46 @@ def test_no_worker_is_a_503_and_not_a_500(
     services.queue = Dead()
     with TestClient(create_app(settings, services)) as offline:
         assert offline.post("/v1/masks", json=ground_body(uploaded)).status_code == 503
+
+
+# ---------------------------------------------------------------- backdrop colour
+
+
+def background_request(digest: str, **over: Any) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "op": "background",
+        "image_sha256": digest,
+        "mask_source": "whole",
+        "colour": "#3366ff",
+    }
+    body.update(over)
+    return body
+
+
+def test_a_backdrop_colour_is_carried_onto_the_job(
+    client: TestClient, services: Services, uploaded: str
+) -> None:
+    """TD-020. The colour used to stop at the boundary — there was nowhere to put it —
+    so `background` painted the same green whatever the request said."""
+    response = client.post("/v1/jobs", json=background_request(uploaded))
+    assert response.status_code == 202, response.text
+
+    stored = services.jobs.get(UUID(response.json()["id"]))
+    assert stored is not None
+    assert stored.spec.colour == "#3366ff"
+    assert stored.spec.rgb_colour((0, 0, 0)) == (0x33, 0x66, 0xFF)
+
+
+def test_a_backdrop_with_neither_colour_nor_description_is_refused(
+    client: TestClient, uploaded: str
+) -> None:
+    response = client.post("/v1/jobs", json=background_request(uploaded, colour=None))
+    assert response.status_code == 422
+    assert "`colour` or `content`" in response.json()["detail"]
+
+
+def test_a_colour_that_is_not_a_colour_names_the_field(client: TestClient, uploaded: str) -> None:
+    """Caught by the request model rather than deep inside, so the 422 says `colour`."""
+    response = client.post("/v1/jobs", json=background_request(uploaded, colour="cornflower"))
+    assert response.status_code == 422
+    assert "colour" in response.text

@@ -62,6 +62,7 @@ export function EditWorkspace() {
   const [op, setOp] = useState<Operation>("remove");
   const [target, setTarget] = useState("");
   const [content, setContent] = useState("");
+  const [colour, setColour] = useState("#2ea043");
 
   const [candidates, setCandidates] = useState<Candidate[] | null>(null);
   const [ambiguous, setAmbiguous] = useState(false);
@@ -140,7 +141,7 @@ export function EditWorkspace() {
 
     const chosen =
       candidates !== null && selected >= 0 ? (candidates[selected]?.mask ?? null) : null;
-    const draft = { op, imageSha256: image.sha256, target, content };
+    const draft = { op, imageSha256: image.sha256, target, content, colour };
 
     try {
       const job = await createJob(getToken, buildJob(draft, chosen));
@@ -179,7 +180,7 @@ export function EditWorkspace() {
   const needsChoice = ambiguous && candidates !== null && selected === REJECTED;
   const canRun =
     image !== null &&
-    ready({ op, imageSha256: image.sha256, target, content }) &&
+    ready({ op, imageSha256: image.sha256, target, content, colour }) &&
     !busy &&
     !needsChoice;
 
@@ -254,7 +255,24 @@ export function EditWorkspace() {
             />
           ) : null}
 
-          {spec.needsContent ? (
+          {spec.picksColour ? (
+            // A colour input rather than a description, because this operation composites
+            // a flat backdrop rather than generating one. Asking for prose here promised
+            // something it cannot do, and until `EditSpec.colour` existed it silently
+            // ignored the answer (TD-020).
+            <label className="flex items-center gap-3 text-sm">
+              <input
+                type="color"
+                value={colour}
+                onChange={(event) => setColour(event.target.value)}
+                aria-label="Backdrop colour"
+                className="h-10 w-16 cursor-pointer rounded-md border border-neutral-300 bg-transparent dark:border-neutral-700"
+              />
+              <span className="text-neutral-600 dark:text-neutral-400">
+                Backdrop colour <code className="text-xs">{colour}</code>
+              </span>
+            </label>
+          ) : spec.needsContent ? (
             <input
               value={content}
               onChange={(event) => setContent(event.target.value)}

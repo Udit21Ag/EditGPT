@@ -180,14 +180,34 @@ class EditSpec(BaseModel):
     mask_source: MaskSource
     target: str | None = None
     content: str | None = None
+    colour: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    """The exact colour for `BACKGROUND`, as `#rrggbb`.
+
+    Carried as a value rather than parsed out of `content` downstream. TD-020 was the
+    absence of this: the operation always painted the same green, so "change the
+    background to blue" succeeded and returned green — a capability advertised, silently
+    not delivered.
+
+    An exact colour is also the honest shape for what this operation *does*. It composites
+    a flat backdrop rather than generating one (TD-005), so a hex value loses nothing a
+    description would have carried, and it removes the guessing entirely: a client that
+    knows the user picked a colour should say which one, not describe it and hope.
+
+    Free text stays in `content` for the day an intent agent can turn "a sunset" into
+    something this operation could paint."""
+
     mask_ref: MaskRef | None = None
     constraints: Constraints = Constraints()
     confidence: Annotated[float, Field(ge=0.0, le=1.0)] = 1.0
 
     @model_validator(mode="after")
     def _actionable(self) -> Self:
-        if self.op in {EditOp.ADD, EditOp.REPLACE, EditOp.BACKGROUND} and not self.content:
+        if self.op in {EditOp.ADD, EditOp.REPLACE} and not self.content:
             raise ValueError(f"{self.op} needs `content` describing what to put there")
+        if self.op is EditOp.BACKGROUND and not (self.content or self.colour):
+            # Either is a complete answer to "what goes there": a hex value says it
+            # exactly, and free text says it for an intent agent to resolve later.
+            raise ValueError("background needs a `colour` or `content` describing the backdrop")
         if self.op is EditOp.REMOVE and not (self.target or self.mask_ref):
             raise ValueError("remove needs either a `target` phrase or an explicit mask")
         if self.mask_source is MaskSource.TEXT and not self.target:
@@ -223,6 +243,18 @@ class EditSpec(BaseModel):
                 f"{image_w}x{image_h} image; a mask may be any size but must match the "
                 "image's aspect ratio"
             )
+
+    def rgb_colour(self, fallback: tuple[int, int, int]) -> tuple[int, int, int]:
+        """`colour` as RGB, or `fallback` when the request did not name one.
+
+        Here rather than in the worker so the parsing sits next to the pattern that
+        validates it. Two places that both turn `#rrggbb` into three integers is two
+        places that can disagree about which end is red.
+        """
+        if self.colour is None:
+            return fallback
+        raw = self.colour.lstrip("#")
+        return (int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16))
 
     @property
     def is_generative(self) -> bool:

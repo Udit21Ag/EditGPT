@@ -14,6 +14,7 @@ const draft = (over: Partial<Draft> = {}): Draft => ({
   imageSha256: "a".repeat(64),
   target: "the car",
   content: "",
+  colour: "#2ea043",
   ...over,
 });
 
@@ -29,7 +30,11 @@ describe("what each operation needs", () => {
 
   it("lets background run with no phrase at all", () => {
     // It floods inward from the border, so it needs no region.
-    expect(ready(draft({ op: "background", target: "", content: "a green wall" }))).toBe(true);
+    expect(ready(draft({ op: "background", target: "", content: "" }))).toBe(true);
+  });
+
+  it("refuses a backdrop whose colour is not a colour", () => {
+    expect(ready(draft({ op: "background", target: "", colour: "cornflower" }))).toBe(false);
   });
 
   it("lets upscale run with neither", () => {
@@ -73,9 +78,20 @@ describe("building the request", () => {
   });
 
   it("calls it 'whole' when no phrase was given", () => {
-    const request = buildJob(draft({ op: "background", target: "", content: "green" }), null);
+    const request = buildJob(draft({ op: "background", target: "", content: "" }), null);
     expect(request.mask_source).toBe("whole");
     expect(request.target).toBeUndefined();
+  });
+
+  it("sends the backdrop colour as an exact value, not a description", () => {
+    // TD-020: "change the background to blue" returned green and reported success,
+    // because nothing downstream read the description.
+    const request = buildJob(draft({ op: "background", target: "", colour: "#3366FF" }), null);
+    expect(request.colour).toBe("#3366ff");
+  });
+
+  it("does not attach a colour to an operation that does not paint one", () => {
+    expect(buildJob(draft({ op: "remove" }), null).colour).toBeUndefined();
   });
 
   it("does not label a grounded region 'whole' just because the phrase was optional", () => {
@@ -110,7 +126,9 @@ describe("the operation list", () => {
   it("gives every operation a hint for the fields it actually shows", () => {
     for (const spec of OPERATIONS) {
       if (spec.acceptsTarget) expect(spec.targetHint.length).toBeGreaterThan(0);
-      if (spec.needsContent) expect(spec.contentHint.length).toBeGreaterThan(0);
+      if (spec.needsContent && !spec.picksColour) {
+        expect(spec.contentHint.length).toBeGreaterThan(0);
+      }
     }
   });
 

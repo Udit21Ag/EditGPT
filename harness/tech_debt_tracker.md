@@ -53,7 +53,7 @@ paid. It still stays visible.
 | TD-014 | Fine-tuning CLIPSeg is blocked on hardware                   | accepted | P2       | models     |
 | TD-015 | Relational referring expressions are not grounded at all     | resolved | P1       | models     |
 | TD-016 | Recorded result dimensions assume the edit preserves them    | resolved | P2       | store      |
-| TD-020 | The background colour is fixed green, not requested          | open     | P2       | models     |
+| TD-020 | The background colour is fixed green, not requested          | resolved | P2       | models     |
 | TD-021 | Edits come back at 2048 px, not the uploaded resolution      | resolved | P1       | worker     |
 | TD-022 | A provider's blank frame was composited as a result          | resolved | P1       | providers  |
 | TD-023 | A phrase matching nothing still returns a confident region  | open     | P2       | models     |
@@ -182,8 +182,15 @@ a product shot and not for a real scene.
 **Why it matters:** limits the operation to one photo genre.
 **Workaround:** the detector returns nothing when the border is not uniform, so the
 caller falls back to semantic segmentation — which drops thin structures.
+**Seen live on 2026-08-28**, now that the browser can ask for this. A background change on
+a real scene (the Taj Mahal photograph) refuses outright with "the border is not a uniform
+backdrop, so the subject must be selected" until the subject is named; naming it works and
+leaves a pale fringe around the subject where hair meets the new colour. Both are this
+item: the refusal is the flood fill declining a scene, and the fringe is the semantic mask
+standing in for a matte.
 **Why deferred:** proper matting needs a model never benchmarked under the memory budget.
-**Trigger:** a background case on a real scene enters the golden set.
+**Trigger:** a background case on a real scene enters the golden set. **Fired** — the
+operation is reachable from the UI and both symptoms are one click away.
 **Resolution:** benchmark a lightweight matting model; keep flood-fill as the fast path.
 
 ### TD-006 — Two of seven planned operations unimplemented
@@ -495,16 +502,31 @@ served under a type they were not. Fixed by covering everything
 
 ### TD-020 — The background colour is fixed green, not requested
 
-Status: open · Priority: P2 · Identified: 2026-08-27 · Area: `packages/models`
+Status: resolved · Priority: P2 · Identified: 2026-08-27 · Resolved: 2026-08-28 · Area: `packages/models`
 **Problem:** `BACKGROUND` always paints the same green, so "change the background to blue"
 produces green.
 **Why it matters:** the operation advertises a capability it does not have, and it fails
 _silently_ — the edit succeeds and returns the wrong colour.
 **Workaround:** none. The golden set only ever asks for green, which is how this survived.
-**Why deferred:** parsing a colour from free text belongs to the intent agent, which does
-not exist yet; a colour table here would be the wrong home for it.
-**Trigger:** any request for a background colour other than green.
-**Resolution:** carry the colour on `EditSpec` and let intent parsing fill it in.
+**Was deferred because** parsing a colour from free text belongs to the intent agent,
+which does not exist yet, and a colour table in `models` would be the wrong home for it.
+**Trigger:** any request for a background colour other than green. **Fired** the moment
+the browser grew a Background button with a field for exactly that.
+
+**Resolved 2026-08-28**, and the deferral turned out to be reasoning about the wrong
+problem. `EditSpec.colour` carries `#rrggbb`, the gateway validates it at the boundary,
+and `rgb_colour` converts it next to the pattern that validates it so two places cannot
+disagree about which end is red. No parsing was needed: **the client asks for a colour
+with a colour input.** This operation composites a flat backdrop rather than generating
+one (TD-005), so a hex value loses nothing prose would have carried — the free-text field
+was promising something the operation could not do even once someone read the answer.
+
+`content` still accepts free text, for the day an intent agent can turn "a sunset" into
+something paintable, and `background` now requires one or the other rather than requiring
+a description nothing read.
+
+Verified live: asked for `#3366ff` and got `#3366ff` across 92% of the frame; asked for
+`#cc00aa` and got `#cb00aa`, one level off through JPEG.
 
 ### TD-021 — Edits come back at 2048 px, not the uploaded resolution
 

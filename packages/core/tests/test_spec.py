@@ -52,8 +52,10 @@ def test_remove_by_text_is_accepted() -> None:
     assert not spec.is_generative
 
 
-@pytest.mark.parametrize("op", [EditOp.ADD, EditOp.REPLACE, EditOp.BACKGROUND])
+@pytest.mark.parametrize("op", [EditOp.ADD, EditOp.REPLACE])
 def test_content_ops_need_content(op: EditOp) -> None:
+    """`BACKGROUND` is deliberately absent: a hex `colour` answers "what goes there" as
+    completely as a description does, so it has its own rule below."""
     with pytest.raises(ValidationError, match="needs `content`"):
         EditSpec(op=op, image_ref=image(), mask_source=MaskSource.BRUSH, mask_ref=mask())
 
@@ -156,3 +158,54 @@ def test_unknown_fields_are_rejected() -> None:
             target="the car",
             targt="the car",  # type: ignore[call-arg]
         )
+
+
+# ---------------------------------------------------------------- background colour
+
+
+def background(**over: object) -> EditSpec:
+    fields: dict[str, object] = {
+        "op": EditOp.BACKGROUND,
+        "image_ref": image(),
+        "mask_source": MaskSource.WHOLE,
+        "content": "a green wall",
+    }
+    fields.update(over)
+    return EditSpec(**fields)  # type: ignore[arg-type]
+
+
+def test_a_colour_is_enough_to_say_what_the_backdrop_should_be() -> None:
+    """TD-020. `content` used to be the only way to answer, and nothing read it — the
+    operation painted the same green whatever it said."""
+    spec = background(content=None, colour="#3366ff")
+    assert spec.rgb_colour((0, 0, 0)) == (0x33, 0x66, 0xFF)
+
+
+def test_free_text_is_still_enough_on_its_own() -> None:
+    """An intent agent will one day turn "a sunset" into something paintable; until then
+    the field is accepted and the fallback colour is used."""
+    assert background(colour=None).rgb_colour((46, 160, 67)) == (46, 160, 67)
+
+
+def test_a_backdrop_described_by_neither_is_refused() -> None:
+    with pytest.raises(ValidationError, match="`colour` or `content`"):
+        background(content=None, colour=None)
+
+
+def test_a_colour_that_is_not_a_colour_is_refused_at_the_boundary() -> None:
+    for bad in ("blue", "#12345", "#gggggg", "3366ff"):
+        with pytest.raises(ValidationError):
+            background(colour=bad)
+
+
+def test_the_channels_are_not_swapped() -> None:
+    """OpenCV is BGR and everything else here is RGB; a swap survives every test that
+    only checks a grey value."""
+    assert background(colour="#ff0000").rgb_colour((0, 0, 0)) == (255, 0, 0)
+    assert background(colour="#0000ff").rgb_colour((0, 0, 0)) == (0, 0, 255)
+
+
+def test_case_does_not_matter() -> None:
+    assert background(colour="#AABBCC").rgb_colour((0, 0, 0)) == background(
+        colour="#aabbcc"
+    ).rgb_colour((0, 0, 0))
