@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from uuid import UUID
 
 from editgpt_core import EditSpec, Job, JobState
@@ -29,8 +30,25 @@ from editgpt_worker.app import Resources, celery_app, resources
 
 log = logging.getLogger(__name__)
 
-Editor = Callable[[bytes, EditSpec], bytes]
-"""Takes the source image's bytes and the spec, returns the edited image's bytes.
+
+@dataclass(frozen=True, slots=True)
+class Produced:
+    """What an editor made: the bytes, and their real type and size.
+
+    Reported rather than inferred from the request. `UPSCALE` doubles the dimensions and a
+    format Pillow cannot write falls back to PNG, so recording what was *asked for* is how
+    the `images` table comes to describe bytes that do not exist — which it did, briefly,
+    for an AVIF upload.
+    """
+
+    data: bytes
+    content_type: str
+    width: int
+    height: int
+
+
+Editor = Callable[[bytes, EditSpec], Produced]
+"""Takes the source image's bytes and the spec, returns what it produced.
 
 Bytes rather than arrays on purpose: the worker's job is orchestration, and keeping the
 pixel type out of this module is what stops the lifecycle from acquiring an opinion about
@@ -38,13 +56,68 @@ image libraries.
 """
 
 
-def noop_editor(source: bytes, spec: EditSpec) -> bytes:
+def noop_editor(source: bytes, spec: EditSpec) -> Produced:
     """Return the input unchanged. The pipe-proving editor."""
     log.info("edit.noop", extra={"op": spec.op.value, "bytes": len(source)})
-    return source
+    return Produced(
+        data=source,
+        content_type=spec.image_ref.content_type,
+        width=spec.image_ref.width,
+        height=spec.image_ref.height,
+    )
 
 
-EDITORS: dict[str, Editor] = {"noop": noop_editor}
+def _real_editor(source: bytes, spec: EditSpec) -> Produced:
+    """The shipping editor. Imported lazily so `tasks` stays importable without a model.
+
+    A module-level import would pull ONNX Runtime and OpenCV into anything that touches
+    this file — including the gateway's own test suite, which imports the task name.
+    """
+    from editgpt_worker.editors import edit
+
+    made = edit(source, spec)
+    return Produced(
+        data=made.data,
+        content_type=made.content_type,
+        width=made.width,
+        height=made.height,
+    )
+
+
+EDITORS: dict[str, Editor] = {"noop": noop_editor, "default": _real_editor}
+"""What a job may ask to be run by.
+
+`noop` returns the image untouched and is kept deliberately: it proves the pipe —
+upload, queue, progress, artifact — without a model, so when an edit misbehaves the
+plumbing is not a suspect. `default` is the real thing.
+"""
+
+
+@celery_app.task(name="editgpt.ground")  # type: ignore[untyped-decorator]
+def ground(digest: str, phrase: str) -> dict[str, object]:
+    """Resolve a phrase to candidate regions. No edit, no job, no state.
+
+    A task rather than gateway code because models live in workers (invariant 3): the web
+    tier must stay small enough to run beside a worker on one 8 GB machine, and grounding
+    needs the detector and the SAM encoder — about 2 GB between them.
+
+    The gateway waits on the result rather than streaming it. Grounding is a few seconds
+    and the client cannot do anything useful until it lands, so a job with progress would
+    be ceremony around a request/response.
+    """
+    from editgpt_worker.editors import decode_image, ground_phrase
+
+    res = resources()
+    found = ground_phrase(decode_image(res.assets.get(digest)), phrase)
+    log.info(
+        "ground.done",
+        extra={
+            "candidates": len(found.candidates),
+            "ambiguous": found.ambiguous,
+            "margin": found.margin,
+        },
+    )
+    return found.model_dump(mode="json")
 
 
 class CancelledError(RuntimeError):
@@ -130,13 +203,13 @@ def run_job(job_id: str, editor: str = "noop", user_id: str = "") -> dict[str, o
         job = _advance(
             res, job, JobState.RUNNING, owner=owner, progress=0.3, detail=f"running {editor}"
         )
-        edited = EDITORS[editor](source, job.spec)
+        made = EDITORS[editor](source, job.spec)
 
         job = _advance(
             res, job, JobState.REVIEW, owner=owner, progress=0.8, detail="checking the result"
         )
-        digest = res.assets.put(edited, content_type=job.spec.image_ref.content_type)
-        _record_outputs(res, job, digest, editor=editor, byte_size=len(edited), owner=owner)
+        digest = res.assets.put(made.data, content_type=made.content_type)
+        _record_outputs(res, job, digest, editor=editor, made=made, owner=owner)
 
         job = _advance(
             res,
@@ -173,23 +246,26 @@ def run_job(job_id: str, editor: str = "noop", user_id: str = "") -> dict[str, o
 
 
 def _record_outputs(
-    res: Resources, job: Job, digest: str, *, editor: str, byte_size: int, owner: UUID
+    res: Resources, job: Job, digest: str, *, editor: str, made: Produced, owner: UUID
 ) -> None:
-    """Note the artifact, its metadata, and what producing it cost."""
+    """Note the artifact, its metadata, and what producing it cost.
+
+    Everything recorded comes from what the editor actually produced. Taking the
+    dimensions and the content type from the *request* instead is how a row comes to
+    describe bytes that are not there: `UPSCALE` doubles the size, and an unsupported
+    output format falls back to PNG.
+    """
     session_factory = getattr(res.jobs, "session_factory", None)
     if session_factory is None:
         return  # an in-memory store: nothing to write these to, and nothing depends on them
 
-    # Dimensions come from the spec because every operation shipped so far preserves
-    # them. `UPSCALE` will not, and when it lands this must read them from the produced
-    # bytes instead — recorded in the debt register rather than guessed at now.
     record_image(
         session_factory,
         sha256=digest,
-        width=job.spec.image_ref.width,
-        height=job.spec.image_ref.height,
-        content_type=job.spec.image_ref.content_type,
-        byte_size=byte_size,
+        width=made.width,
+        height=made.height,
+        content_type=made.content_type,
+        byte_size=len(made.data),
         user_id=owner,
     )
     record_artifact(session_factory, job_id=job.id, sha256=digest, kind="result")

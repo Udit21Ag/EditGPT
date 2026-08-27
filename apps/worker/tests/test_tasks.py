@@ -144,7 +144,7 @@ def test_an_editor_that_raises_fails_the_job_rather_than_leaving_it_running(
 ) -> None:
     """The failure mode the two Celery time limits exist to prevent, forced directly."""
 
-    def explode(source: bytes, spec: EditSpec) -> bytes:
+    def explode(source: bytes, spec: EditSpec) -> tasks.Produced:
         raise RuntimeError("the model fell over")
 
     tasks.EDITORS["exploding"] = explode
@@ -178,9 +178,16 @@ def test_an_unknown_job_is_reported_rather_than_raised(res: Resources) -> None:
     assert result["state"] == "missing"
 
 
-def test_the_editor_registry_only_ships_the_pipe_prover(res: Resources) -> None:
-    """A guard on scope: Phase 3 must not have quietly acquired a model."""
-    assert set(tasks.EDITORS) == {"noop"}
+def test_the_pipe_prover_is_still_registered(res: Resources) -> None:
+    """`noop` must survive the arrival of the real editor.
+
+    It is what proves the queue, the transitions, the artifacts and the ledger without a
+    model, so a failure there is never ambiguous between the plumbing and the pixels. The
+    Phase 3 version of this test asserted `noop` was the *only* editor; that guard has
+    done its job, and this is what replaces it.
+    """
+    assert "noop" in tasks.EDITORS
+    assert "default" in tasks.EDITORS, "the shipping editor should be registered"
 
 
 def test_resources_are_cached_per_process() -> None:

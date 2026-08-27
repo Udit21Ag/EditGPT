@@ -14,7 +14,7 @@ use.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, Any
 
 from editgpt_store import (
@@ -46,6 +46,15 @@ class Queue:
     def send(self, job_id: str, *, editor: str = "noop", user_id: str = "") -> None:
         raise NotImplementedError
 
+    def call(self, name: str, *args: object, timeout_s: float = 30.0) -> dict[str, object]:
+        """Run a task and wait for its answer.
+
+        Only for work that is short and that the caller cannot proceed without — grounding
+        a phrase, not editing an image. It occupies a gateway thread for the duration,
+        which is why the timeout is not optional.
+        """
+        raise NotImplementedError
+
 
 @dataclass
 class CeleryQueue(Queue):
@@ -61,16 +70,27 @@ class CeleryQueue(Queue):
             "editgpt.run_job", args=[job_id], kwargs={"editor": editor, "user_id": user_id}
         )
 
+    def call(self, name: str, *args: object, timeout_s: float = 30.0) -> dict[str, object]:
+        result: dict[str, object] = self.app.send_task(name, args=list(args)).get(timeout=timeout_s)
+        return result
+
 
 @dataclass
 class RecordingQueue(Queue):
     """Records what would have been sent. Used by tests, and when Redis is absent."""
 
     sent: list[tuple[str, str]]
+    called: list[tuple[str, tuple[object, ...]]] = field(default_factory=list)
+    answers: dict[str, dict[str, object]] = field(default_factory=dict)
 
     def send(self, job_id: str, *, editor: str = "noop", user_id: str = "") -> None:
         del user_id
         self.sent.append((job_id, editor))
+
+    def call(self, name: str, *args: object, timeout_s: float = 30.0) -> dict[str, object]:
+        del timeout_s  # nothing is really waited on here
+        self.called.append((name, args))
+        return self.answers.get(name, {})
 
 
 @dataclass

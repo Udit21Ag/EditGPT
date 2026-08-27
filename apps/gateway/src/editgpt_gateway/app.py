@@ -22,6 +22,7 @@ from editgpt_core import (
     Constraints,
     EditOp,
     EditSpec,
+    Grounding,
     Job,
     JobState,
     MaskRef,
@@ -91,6 +92,36 @@ class ImageCreated(BaseModel):
     megapixels: float
 
 
+class MaskPayloadOut(BaseModel):
+    width: int
+    height: int
+    counts: list[int]
+
+
+class GroundRequest(BaseModel):
+    """Ask what a phrase refers to, before committing to an edit."""
+
+    image_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    target: str = Field(min_length=1, max_length=500)
+    """The phrase to ground. Bounded because it is sent to a model with a fixed token
+    budget, and an unbounded string there is a slow request a caller can ask for."""
+
+
+class CandidateView(BaseModel):
+    box: tuple[float, float, float, float]
+    score: float
+    mask: MaskPayloadOut
+    label: str = ""
+
+
+class GroundingView(BaseModel):
+    """What the phrase resolved to, and whether the client should ask before editing."""
+
+    candidates: list[CandidateView]
+    ambiguous: bool
+    margin: float
+
+
 class MaskPayload(BaseModel):
     width: int
     height: int
@@ -110,10 +141,13 @@ class JobRequest(BaseModel):
     target: str | None = None
     content: str | None = None
     mask: MaskPayload | None = None
-    editor: str = Field(default="noop", pattern=r"^[a-z][a-z0-9_]{0,31}$")
+    editor: str = Field(default="default", pattern=r"^[a-z][a-z0-9_]{0,31}$")
     """Which editor the worker should run. Constrained to a slug because it is used as a
     dictionary key in another process; an unbounded string there is a lookup on
-    user-controlled data."""
+    user-controlled data.
+
+    `default` runs the real pipeline. `noop` returns the image untouched and exists so a
+    deployment can prove the queue works without spending model time."""
 
     max_seconds: float | None = None
     allow_remote: bool | None = None
@@ -352,6 +386,59 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
                 # Named for nginx, which otherwise buffers the stream into uselessness.
                 "x-accel-buffering": "no",
             },
+        )
+
+    @app.post("/v1/masks", response_model=GroundingView)
+    def ground(
+        request: Request,
+        body: GroundRequest,
+        svc: ServicesDep,
+        principal: PrincipalDep,
+    ) -> GroundingView:
+        """Resolve a phrase to candidate regions without editing anything.
+
+        Separate from job creation on purpose. Grounding is cheap and reversible; editing
+        is neither, so a client that wants to show the user what will be changed should be
+        able to ask without committing to it — and when the answer is ambiguous, that is
+        the difference between one extra click and erasing the wrong object.
+
+        Dispatched to a worker and waited on, rather than run here: grounding needs the
+        detector and the SAM encoder, about 2 GB between them, and **no model loads in the
+        web process** (invariant 3). That is the same reason jobs are sent by name.
+
+        Waited on rather than streamed because the client cannot do anything useful until
+        it lands — a job with progress would be ceremony around a request and a response.
+        """
+        _enforce_rate_limit(request, svc)
+        if not svc.assets.exists(body.image_sha256):
+            raise HTTPException(404, f"no image {body.image_sha256}; upload it first")
+
+        del principal  # the dependency is the check; ownership of an image is TD-019
+        try:
+            answer = svc.queue.call("editgpt.ground", body.image_sha256, body.target)
+        except NotImplementedError:
+            raise HTTPException(503, "no worker is available to ground a phrase") from None
+        except Exception as error:
+            # A worker that is down, busy or slow is a 503, not a 500: nothing is wrong
+            # with the request, and the client should retry rather than change it.
+            log.warning("ground.unavailable", extra={"error": type(error).__name__})
+            raise HTTPException(503, "grounding is unavailable; try again shortly") from error
+
+        found = Grounding.model_validate(answer)
+        return GroundingView(
+            candidates=[
+                CandidateView(
+                    box=c.box,
+                    score=c.score,
+                    mask=MaskPayloadOut(
+                        width=c.mask_ref.width, height=c.mask_ref.height, counts=c.mask_ref.counts
+                    ),
+                    label=c.label,
+                )
+                for c in found.candidates
+            ],
+            ambiguous=found.ambiguous,
+            margin=found.margin,
         )
 
     @app.get("/")

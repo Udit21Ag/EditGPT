@@ -30,7 +30,7 @@ def test_a_job_is_accepted_and_queued(
 
     queue = services.queue
     assert isinstance(queue, RecordingQueue)
-    assert queue.sent == [(body["id"], "noop")]
+    assert queue.sent == [(body["id"], "default")], "a job with no editor named runs the real one"
 
 
 def test_a_job_against_an_unknown_image_is_refused(client: TestClient) -> None:
@@ -271,3 +271,109 @@ def test_a_malformed_digest_is_a_422_not_a_500(client: TestClient, digest: str) 
     store, which rejects anything that is not a digest — correct there, a 500 here."""
     response = client.post("/v1/jobs", json=remove_request(digest))
     assert response.status_code == 422, response.text
+
+
+# ---------------------------------------------------------------- grounding
+
+
+def ground_body(digest: str, target: str = "the car") -> dict[str, Any]:
+    return {"image_sha256": digest, "target": target}
+
+
+def test_grounding_returns_candidates_from_the_worker(
+    client: TestClient, services: Services, uploaded: str
+) -> None:
+    """The gateway must not ground anything itself: models live in workers."""
+    from editgpt_core import Grounding, MaskCandidate, MaskRef
+
+    answer = Grounding(
+        candidates=[
+            MaskCandidate(
+                box=(0.1, 0.1, 0.4, 0.4),
+                score=0.9,
+                mask_ref=MaskRef(width=4, height=4, counts=[0, 8, 8]),
+            )
+        ],
+        ambiguous=False,
+        margin=0.8,
+    )
+    queue = services.queue
+    assert isinstance(queue, RecordingQueue)
+    queue.answers["editgpt.ground"] = answer.model_dump(mode="json")
+
+    response = client.post("/v1/masks", json=ground_body(uploaded))
+    assert response.status_code == 200, response.text
+
+    body = response.json()
+    assert body["ambiguous"] is False
+    assert len(body["candidates"]) == 1
+    assert body["candidates"][0]["mask"]["counts"] == [0, 8, 8]
+    assert queue.called == [("editgpt.ground", (uploaded, "the car"))]
+
+
+def test_grounding_reports_ambiguity_so_the_client_can_ask(
+    client: TestClient, services: Services, uploaded: str
+) -> None:
+    from editgpt_core import Grounding, MaskCandidate, MaskRef
+
+    two = [
+        MaskCandidate(
+            box=(0.1 * (i + 1), 0.1, 0.3 + 0.1 * i, 0.4),
+            score=0.55 - 0.05 * i,
+            mask_ref=MaskRef(width=4, height=4, counts=[0, 8, 8]),
+        )
+        for i in range(2)
+    ]
+    queue = services.queue
+    assert isinstance(queue, RecordingQueue)
+    queue.answers["editgpt.ground"] = Grounding(
+        candidates=two, ambiguous=True, margin=0.05
+    ).model_dump(mode="json")
+
+    body = client.post("/v1/masks", json=ground_body(uploaded)).json()
+    assert body["ambiguous"] is True
+    assert body["margin"] == pytest.approx(0.05)
+    assert len(body["candidates"]) == 2
+
+
+def test_grounding_an_unknown_image_is_refused_before_the_worker_is_bothered(
+    client: TestClient, services: Services
+) -> None:
+    response = client.post("/v1/masks", json=ground_body("f" * 64))
+    assert response.status_code == 404
+
+    queue = services.queue
+    assert isinstance(queue, RecordingQueue)
+    assert not queue.called, "a missing image should not cost a worker round trip"
+
+
+def test_an_empty_phrase_is_rejected_by_the_contract(client: TestClient, uploaded: str) -> None:
+    assert client.post("/v1/masks", json=ground_body(uploaded, "")).status_code == 422
+
+
+def test_an_unbounded_phrase_is_rejected(client: TestClient, uploaded: str) -> None:
+    """It reaches a model with a fixed token budget; an unbounded string there is a slow
+    request a caller can simply ask for."""
+    assert client.post("/v1/masks", json=ground_body(uploaded, "x" * 5000)).status_code == 422
+
+
+def test_grounding_a_malformed_digest_is_a_422_not_a_500(client: TestClient) -> None:
+    assert client.post("/v1/masks", json=ground_body("not-a-digest")).status_code == 422
+
+
+def test_no_worker_is_a_503_and_not_a_500(
+    settings: Settings, services: Services, uploaded: str
+) -> None:
+    """Nothing is wrong with the request; the client should retry, not change it."""
+    from editgpt_gateway.deps import Queue
+
+    class Dead(Queue):
+        def send(self, job_id: str, *, editor: str = "noop", user_id: str = "") -> None:
+            return None
+
+        def call(self, name: str, *args: object, timeout_s: float = 30.0) -> dict[str, object]:
+            raise TimeoutError("no worker answered")
+
+    services.queue = Dead()
+    with TestClient(create_app(settings, services)) as offline:
+        assert offline.post("/v1/masks", json=ground_body(uploaded)).status_code == 503

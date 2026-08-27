@@ -6,6 +6,10 @@ requires-python = ">=3.12"
 dependencies = [
     "editgpt-core",
     "editgpt-store",
+    # The worker is where models live (architecture invariant 3). The gateway sends a task
+    # by *name* precisely so this dependency stops here and never reaches the web tier.
+    "editgpt-models",
+    "editgpt-providers",
     "celery>=5.4",
     "redis>=5.2",
     "pydantic-settings>=2.6",
