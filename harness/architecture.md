@@ -102,6 +102,35 @@ Two erasers ship because they fail differently: one erases a small object on a f
 background where the other leaves a ghost, and loses on large objects over texture. The
 router picks by measurement rather than by preference.
 
+## Grounding and the chooser
+
+Turning a phrase into a region is a **separate call** from editing with it. `POST /v1/masks`
+grounds and returns ranked candidates; the job then carries the chosen mask. Grounding is
+cheap and reversible where an edit is neither, and separating them is what lets a user
+approve a region before any model time is spent.
+
+**Ask only when the answer is shaky.** ADR-0003 measured 0.516 -> 0.832 on held-out
+RefCOCOg from offering five candidates, and gates on the top-two score margin at 0.15.
+Always-asking reaches 0.832 and was rejected: on 45% of phrases the detector scores 0.95
+against 0.07, and a chooser there is friction for nothing. The client shows the region it
+found and keeps the alternatives one tap away.
+
+**The chosen mask travels with the job.** Re-grounding server-side would discard the
+user's choice, pay for the expensive half of SAM twice, and can return a *different* mask
+the second time. It also means the worker skips grounding entirely — the detector and the
+SAM encoder, about two seconds and 2 GB.
+
+**Sizes.** Grounding runs at the worker's bounded working size, so a candidate's mask is
+at most 2048 on its longest side and *not* the upload's resolution. `EditSpec` therefore
+accepts a mask at any size whose aspect matches the image and lets the worker scale it;
+requiring an exact match only forced clients to upscale a mask the worker scales straight
+back down. `decode_image` keeps full resolution for the *result* (TD-021) — do not reuse
+it for grounding, which regressed once exactly that way.
+
+**Every mask on the wire is COCO RLE**: column-major, opening with a run of zeros, so odd
+runs are the set ones. Interchangeable with the wider tooling ecosystem, and transposed if
+you read it row-major.
+
 ## Data stores
 
 | Store             | Responsibility                                             | Status                                                          |

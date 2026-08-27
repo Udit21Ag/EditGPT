@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, createJob, imageObjectUrl, streamJob, uploadImage } from "./api";
+import {
+  ApiError,
+  createJob,
+  groundPhrase,
+  imageObjectUrl,
+  streamJob,
+  uploadImage,
+} from "./api";
 
 const token = async () => "session-token";
 const noToken = async () => null;
@@ -127,5 +134,69 @@ describe("gateway url", () => {
       vi.unstubAllEnvs();
       vi.resetModules();
     }
+  });
+});
+
+describe("grounding a phrase", () => {
+  it("asks the gateway what the phrase refers to", async () => {
+    const fetchMock = respondWith({ candidates: [], ambiguous: false, margin: 0 });
+    await groundPhrase(token, "b".repeat(64), "the car");
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toMatch(/\/v1\/masks$/);
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      image_sha256: "b".repeat(64),
+      target: "the car",
+    });
+  });
+
+  it("returns the candidates in the order the gateway ranked them", async () => {
+    const candidate = (score: number) => ({
+      box: [0, 0, 1, 1],
+      score,
+      mask: { width: 2, height: 2, counts: [4] },
+      label: "",
+    });
+    respondWith({ candidates: [candidate(0.9), candidate(0.4)], ambiguous: true, margin: 0.5 });
+
+    const found = await groundPhrase(token, "b".repeat(64), "the zebra");
+    expect(found.candidates.map((c) => c.score)).toEqual([0.9, 0.4]);
+    expect(found.ambiguous).toBe(true);
+  });
+
+  it("surfaces a phrase that matched nothing as an empty answer, not an error", async () => {
+    // A real outcome rather than a fault: the caller offers the brush instead.
+    respondWith({ candidates: [], ambiguous: false, margin: 0 });
+    await expect(groundPhrase(token, "b".repeat(64), "a unicorn")).resolves.toEqual({
+      candidates: [],
+      ambiguous: false,
+      margin: 0,
+    });
+  });
+
+  it("raises with the gateway's reason when grounding is unavailable", async () => {
+    respondWith({ detail: "grounding is unavailable; try again shortly" }, { status: 503 });
+    await expect(groundPhrase(token, "b".repeat(64), "the car")).rejects.toThrow(
+      /grounding is unavailable/,
+    );
+  });
+});
+
+describe("running the chosen candidate", () => {
+  it("sends the mask the user picked rather than the phrase alone", async () => {
+    // The point of the picker. Re-grounding server-side would pay for the expensive half
+    // of SAM twice and could return a different mask the second time.
+    const mask = { width: 4, height: 2, counts: [3, 2, 3] };
+    const fetchMock = respondWith({ id: "job-1" });
+    await createJob(token, {
+      op: "remove",
+      image_sha256: "c".repeat(64),
+      target: "the zebra",
+      mask_source: "brush",
+      mask,
+    });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1]?.body)).mask).toEqual(mask);
   });
 });

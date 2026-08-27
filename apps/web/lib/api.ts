@@ -10,6 +10,10 @@
  * to one of those and make it untestable in either.
  */
 
+import type { MaskPayload } from "./rle";
+
+export type { MaskPayload };
+
 export type GetToken = () => Promise<string | null>;
 
 /**
@@ -80,6 +84,50 @@ export interface Job {
   steps: JobStep[];
 }
 
+/** One region a phrase might have meant. `box` is fractions of the image, not pixels. */
+export interface Candidate {
+  box: [number, number, number, number];
+  score: number;
+  mask: MaskPayload;
+  label: string;
+}
+
+export interface Grounding {
+  candidates: Candidate[];
+  /** Whether the client should ask before editing. See ADR-0003. */
+  ambiguous: boolean;
+  /** How far the best candidate beat the runner-up. Zero with fewer than two. */
+  margin: number;
+}
+
+/**
+ * Ask what a phrase refers to, without editing anything.
+ *
+ * Deliberately its own call rather than part of creating a job. Grounding is cheap and
+ * reversible and an erase is neither, so the user can be shown what is about to change —
+ * and when the answer is shaky, the difference between one extra click and erasing the
+ * wrong object.
+ *
+ * Each candidate carries its mask, at the resolution grounding ran at rather than the
+ * upload's. Send the chosen one straight back on the job: the gateway takes a mask at any
+ * size that matches the image's shape, so there is nothing to rescale here.
+ */
+export async function groundPhrase(
+  getToken: GetToken,
+  imageSha256: string,
+  target: string,
+): Promise<Grounding> {
+  const response = await fetch(
+    `${GATEWAY_URL}/v1/masks`,
+    await authorized(getToken, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ image_sha256: imageSha256, target }),
+    }),
+  );
+  return response.ok ? response.json() : decode(response);
+}
+
 export async function uploadImage(getToken: GetToken, file: File): Promise<UploadedImage> {
   const body = new FormData();
   body.append("file", file);
@@ -98,6 +146,7 @@ export interface CreateJob {
   target?: string;
   content?: string;
   mask_source?: string;
+  mask?: MaskPayload;
   editor?: string;
 }
 

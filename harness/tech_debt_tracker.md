@@ -56,6 +56,7 @@ paid. It still stays visible.
 | TD-020 | The background colour is fixed green, not requested          | open     | P2       | models     |
 | TD-021 | Edits come back at 2048 px, not the uploaded resolution      | resolved | P1       | worker     |
 | TD-022 | A provider's blank frame was composited as a result          | resolved | P1       | providers  |
+| TD-023 | A phrase matching nothing still returns a confident region  | open     | P2       | models     |
 
 ---
 
@@ -554,3 +555,29 @@ per-channel spread 61.7; the failure measured 11.3 and 6.7 after compositing. Bo
 conditions are required, because darkness alone is not a fault — `i4r` measured mean 37.2
 and was correct.
 **Confirmed transient:** the identical call minutes later produced a correct moustache.
+
+### TD-023 — A phrase matching nothing still returns a confident region
+
+Status: open · Priority: P2 · Identified: 2026-08-28 · Area: `packages/models`
+**Problem:** grounding "a unicorn" against a photograph of the Taj Mahal returns one
+candidate at margin 1.000, which the ambiguity gate reads as *certainty* and answers
+without asking. Measured live on 2026-08-28 while verifying the picker.
+**Why it matters:** the empty-candidates branch — "nothing here matches those words,
+try describing it differently" — is written on both sides of the wire and effectively
+never fires. A user who mistypes or describes something absent gets a confident wrong
+region rather than being told.
+**Why it exists:** the same property ADR-0002 was pleased about. Grounding DINO abstained
+on 0 of 250 held-out phrases where CLIPSeg abstained on 20, which is what made it the
+better lane; always answering is the flip side of always finding something. The margin
+gate then compounds it, because a single candidate has nothing to be close to and so
+scores maximally unambiguous.
+**Workaround, and it is a real one:** the region is drawn on the picture before anything
+is edited, and "Not what you meant?" opens the alternatives. The user sees the wrong
+region rather than discovering it in the result.
+**Why deferred:** ADR-0003 measured absolute detection score as a much weaker separator
+than the margin and rejected it as the *gate*. Using it as an abstention signal is a
+different question and needs its own measurement rather than a guessed threshold.
+**Trigger:** a user reports an edit to something they did not name.
+**Resolution:** measure whether the top score separates present from absent phrases on a
+held-out set with negatives — `benchmarks/ambiguity.py` has the harness — and if it does,
+abstain below it rather than answering.

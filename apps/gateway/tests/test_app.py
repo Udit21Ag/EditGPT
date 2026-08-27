@@ -8,12 +8,17 @@ suite that stops being run.
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 from editgpt_core import EditOp
 from editgpt_gateway.app import create_app
 from editgpt_gateway.deps import Services
 from editgpt_gateway.settings import Settings
 from fastapi.testclient import TestClient
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_health_reports_environment(client: TestClient) -> None:
@@ -56,6 +61,26 @@ def test_capabilities_advertises_only_supported_operations(client: TestClient) -
 def test_no_operation_is_both_supported_and_unsupported(client: TestClient) -> None:
     body = client.get("/capabilities").json()
     assert not set(body["operations"]) & set(body["unsupported"])
+
+
+def test_the_web_client_offers_exactly_what_is_advertised(client: TestClient) -> None:
+    """The buttons in the browser against the operations the gateway implements.
+
+    `apps/web/lib/edit-request.ts` mirrors `EditSpec`'s rules so the form can grey out a
+    button instead of handing the user a 422. A mirror drifts, and both directions hurt:
+    an operation offered with nothing behind it is a lie the user acts on, and one
+    implemented but never offered is work nobody can reach — which is what the whole
+    candidate picker turned out to be.
+
+    Read out of the TypeScript rather than duplicated here, so the assertion fails when
+    the list changes rather than when someone remembers to update a copy of it.
+    """
+    source = (REPO_ROOT / "apps/web/lib/edit-request.ts").read_text()
+    offered = set(re.findall(r'^    op: "([a-z]+)",$', source, re.MULTILINE))
+    assert offered, "could not find the operation list; the parser or the file moved"
+
+    advertised = set(client.get("/capabilities").json()["operations"])
+    assert offered == advertised
 
 
 def test_capabilities_publishes_the_upload_ceiling(client: TestClient, settings: Settings) -> None:
