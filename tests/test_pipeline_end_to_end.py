@@ -1,9 +1,16 @@
-"""Phase 3's exit criterion, executed: upload → job → worker → progress → result.
+"""The pipe, executed: upload → job → worker → progress → result.
+
+Every job here names `editor: "noop"` deliberately. This file proves the *plumbing* —
+transitions, progress, artifacts, idempotency, cancellation — and `noop` returns the image
+untouched, so a failure here is never ambiguous between the queue and the model. It also
+keeps `make check` hermetic: the real editor loads 550 MB of weights.
 
 This is the only test that drives the gateway and the worker together. It runs the real
 FastAPI app over a real HTTP client, a real SQLAlchemy store, a real filesystem asset
 store and the **real Celery task function**, with a queue that executes eagerly in-process
 and an in-memory Redis. Nothing about the lifecycle is stubbed.
+
+Whether the *edit* is any good is `make eval`'s question, on real photographs.
 
 What it does not cover, and what does cover it instead: the Postgres wire protocol
 (`packages/store` runs the same repository against SQLAlchemy), Redis pub/sub transport
@@ -157,7 +164,13 @@ def test_upload_to_result_end_to_end(stack: dict[str, Any]) -> None:
 
     created = client.post(
         "/v1/jobs",
-        json={"op": "remove", "image_sha256": digest, "mask_source": "text", "target": "the car"},
+        json={
+            "op": "remove",
+            "image_sha256": digest,
+            "mask_source": "text",
+            "target": "the car",
+            "editor": "noop",
+        },
         headers={"Idempotency-Key": "e2e-1"},
     )
     assert created.status_code == 202, created.text
@@ -181,7 +194,7 @@ def test_the_progress_stream_shows_the_whole_run(stack: dict[str, Any]) -> None:
     ).json()["sha256"]
     job_id = client.post(
         "/v1/jobs",
-        json={"op": "remove", "image_sha256": digest, "target": "the car"},
+        json={"op": "remove", "image_sha256": digest, "target": "the car", "editor": "noop"},
     ).json()["id"]
 
     with client.stream("GET", f"/v1/jobs/{job_id}/events") as response:
@@ -203,7 +216,10 @@ def test_the_worker_published_every_transition(stack: dict[str, Any]) -> None:
     digest = client.post(
         "/v1/images", files={"file": ("photo.png", png_bytes(), "image/png")}
     ).json()["sha256"]
-    client.post("/v1/jobs", json={"op": "remove", "image_sha256": digest, "target": "the car"})
+    client.post(
+        "/v1/jobs",
+        json={"op": "remove", "image_sha256": digest, "target": "the car", "editor": "noop"},
+    )
 
     published = [ProgressEvent.from_json(p) for p in stack["redis"].published]
     assert [e.state for e in published] == ["planning", "running", "review", "done"]
@@ -216,7 +232,8 @@ def test_the_run_is_recorded_as_an_artifact_and_a_ledger_entry(stack: dict[str, 
         "/v1/images", files={"file": ("photo.png", png_bytes(), "image/png")}
     ).json()["sha256"]
     job_id = client.post(
-        "/v1/jobs", json={"op": "remove", "image_sha256": digest, "target": "the car"}
+        "/v1/jobs",
+        json={"op": "remove", "image_sha256": digest, "target": "the car", "editor": "noop"},
     ).json()["id"]
 
     artifacts = artifacts_for(stack["session_factory"], UUID(job_id))
@@ -233,7 +250,7 @@ def test_a_retried_request_does_not_run_the_job_twice(stack: dict[str, Any]) -> 
     digest = client.post(
         "/v1/images", files={"file": ("photo.png", png_bytes(), "image/png")}
     ).json()["sha256"]
-    body = {"op": "remove", "image_sha256": digest, "target": "the car"}
+    body = {"op": "remove", "image_sha256": digest, "target": "the car", "editor": "noop"}
     headers = {"Idempotency-Key": "retry-me"}
 
     first = client.post("/v1/jobs", json=body, headers=headers)
@@ -254,7 +271,8 @@ def test_a_cancelled_job_never_reaches_the_editor(stack: dict[str, Any]) -> None
     # Create the job without running it, cancel, then run the task by hand.
     stack["queue"].execute = False
     job_id = client.post(
-        "/v1/jobs", json={"op": "remove", "image_sha256": digest, "target": "the car"}
+        "/v1/jobs",
+        json={"op": "remove", "image_sha256": digest, "target": "the car", "editor": "noop"},
     ).json()["id"]
     client.post(f"/v1/jobs/{job_id}/cancel")
 

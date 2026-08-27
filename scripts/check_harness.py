@@ -162,8 +162,30 @@ def main() -> int:
         for op in sorted(advertised - covered)
     )
 
-    # Every open debt item needs a trigger, or it never gets paid down.
+    # The register's summary table and its detail sections must describe the same set.
+    #
+    # A botched edit once left TD-015 and TD-016 as table rows with no section at all, and
+    # duplicated another item's heading. Nothing noticed, because the trigger check below
+    # only inspects sections that exist — so an item could vanish from the part that
+    # carries its reasoning while still looking present in the index.
     debt = (ROOT / "harness" / "tech_debt_tracker.md").read_text()
+    listed = set(re.findall(r"^\| (TD-\d+) \|", debt, re.M))
+    detailed = re.findall(r"^### (TD-[\dN]+) —", debt, re.M)
+    documented = {ident for ident in detailed if not ident.endswith("00N")}
+
+    failures.extend(
+        f"harness/tech_debt_tracker.md: {ident} is in the table with no ### section"
+        for ident in sorted(listed - documented)
+    )
+    failures.extend(
+        f"harness/tech_debt_tracker.md: {ident} has a ### section but is not in the table"
+        for ident in sorted(documented - listed)
+    )
+    repeated = {i for i in documented if detailed.count(i) > 1}
+    failures.extend(
+        f"harness/tech_debt_tracker.md: {ident} has more than one ### section"
+        for ident in sorted(repeated)
+    )
     for block in debt.split("### TD-")[1:]:
         ident = block.split("\n", 1)[0].strip()
         if ident.startswith("00N"):

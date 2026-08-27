@@ -30,6 +30,38 @@ import pytest
 CREDENTIAL_PREFIXES = ("CLERK_", "EDITGPT_CLERK_", "EDITGPT_S3_", "CLOUDFLARE_", "GEMINI_")
 CREDENTIAL_NAMES = ("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY", "NEXT_PUBLIC_GATEWAY_URL")
 
+HEAVY_MARKERS = ("slow", "memory", "service", "live")
+"""Markers whose tests may spend real resources. Everything else is the fast tier."""
+
+
+@pytest.fixture(autouse=True)
+def _no_real_editing_in_the_fast_tier(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail loudly if an unmarked test routes a job to the editor that loads models.
+
+    The worker's default editor became the real one the moment it learned to edit, and
+    the integration tests kept passing — 84 seconds slower, silently, loading 550 MB of
+    weights inside `make check`. Sockets are already blocked by default for the same
+    reason; this is the same rule for the other expensive resource.
+
+    Guarded at `tasks._real_editor` rather than at the weights: that is the single door
+    the worker goes through, so nothing can route around it, and patching further down
+    would miss modules that bound `model_path` at import time.
+    """
+    if any(request.node.get_closest_marker(name) for name in HEAVY_MARKERS):
+        return
+
+    from editgpt_worker import tasks
+
+    def refuse(*_: object) -> bytes:
+        raise AssertionError(
+            "this test ran the real editor, which loads models. Pass "
+            '`"editor": "noop"` when the point is the pipe, or mark the test `slow`.'
+        )
+
+    monkeypatch.setitem(tasks.EDITORS, "default", refuse)
+
 
 def pytest_configure(config: pytest.Config) -> None:
     del config  # the hook's signature; nothing here depends on it
