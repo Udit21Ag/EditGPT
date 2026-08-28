@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import io
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,6 +35,7 @@ from editgpt_models.compositing import RGB, Mask, reproject
 from editgpt_models.config import load_thresholds
 from editgpt_models.execute import Models, execute
 from editgpt_models.registry import model_path
+from editgpt_models.segment import Segmentation
 from editgpt_models.slot import ModelSlot
 
 log = logging.getLogger(__name__)
@@ -153,6 +155,18 @@ def ground_phrase(image: RGB, phrase: str) -> Grounding:
     return candidates_from_phrase(
         detector(), session("sam-encoder"), session("sam-decoder"), image, phrase
     )
+
+
+def point_region(image: RGB, points: Sequence[tuple[float, float, bool]]) -> Segmentation:
+    """The region under a tap. Beside `ground_phrase` because it answers the same question.
+
+    Loads the SAM sessions and nothing else — no detector. Words having failed is the
+    usual reason a user starts tapping, and running the model that just failed to
+    understand them would give the same answer again.
+    """
+    from editgpt_models.segment import mask_from_points
+
+    return mask_from_points(session("sam-encoder"), session("sam-decoder"), image, points)
 
 
 @dataclass(frozen=True, slots=True)

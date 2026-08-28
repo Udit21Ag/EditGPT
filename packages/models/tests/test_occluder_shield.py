@@ -234,3 +234,76 @@ def test_a_different_image_is_encoded_again() -> None:
     segment.embed(encoder, image())
     segment.embed(encoder, other)
     assert encoder.calls == 2
+
+
+# ------------------------------------------------------------------ tapping
+
+
+def test_a_tap_returns_the_region_under_it() -> None:
+    """Magic select: SAM alone, no detector. The scripted decoder answers the prompted
+    point, which is exactly the contract this function relies on."""
+    from editgpt_models.segment import mask_from_points
+
+    region = box(40, 120, 40, 120)
+    decoder = ScriptedDecoder([(region, 0.97)])
+    found = mask_from_points(FakeEncoder(), decoder, image(), [(0.3, 0.3, True)])
+
+    assert found.source == "sam-point"
+    assert found.confidence == pytest.approx(0.97)
+    assert (found.mask > 0)[region].all()
+
+
+def test_a_tap_that_finds_nothing_is_a_real_answer() -> None:
+    """Not an error: the caller says "nothing there" rather than erasing a guess."""
+    from editgpt_models.segment import mask_from_points
+
+    found = mask_from_points(FakeEncoder(), ScriptedDecoder([]), image(), [(0.3, 0.3, True)])
+    assert found.source == "none"
+    assert found.confidence == 0.0
+    assert not found.mask.any()
+
+
+def test_no_points_asks_the_decoder_nothing() -> None:
+    from editgpt_models.segment import mask_from_points
+
+    decoder = ScriptedDecoder([])
+    found = mask_from_points(FakeEncoder(), decoder, image(), [])
+    assert not found.mask.any()
+    assert not decoder.points, "an empty prompt should not reach the model"
+
+
+def test_an_excluded_point_is_sent_as_a_negative_prompt() -> None:
+    """The second half of the interaction — tap what came along and should not have.
+
+    Asserted on the labels the decoder receives, because that is the only place the
+    distinction exists; a positive and a negative tap are the same coordinates otherwise.
+    """
+    from editgpt_models import segment
+
+    seen: dict[str, np.ndarray] = {}
+    real = segment._decode
+
+    def capture(
+        decoder: Any, embedding: Any, coords: Any, labels: Any, shape: Any, scale: Any
+    ) -> tuple[Any, float]:
+        seen["labels"] = labels
+        seen["coords"] = coords
+        return real(decoder, embedding, coords, labels, shape, scale)
+
+    segment._decode, original = capture, segment._decode
+    try:
+        segment.mask_from_points(
+            FakeEncoder(),
+            ScriptedDecoder([]),
+            image(),
+            [(0.3, 0.3, True), (0.6, 0.6, False)],
+        )
+    finally:
+        segment._decode = original
+
+    labels = seen["labels"][0].tolist()
+    assert labels[:2] == [1.0, 0.0], f"include/exclude were not encoded as 1/0: {labels}"
+    # SAM's export reads the final prompt as a box corner without a padding point, and the
+    # mask tears along it.
+    assert labels[-1] == -1.0, "the padding point is missing"
+    assert seen["coords"].shape[1] == 3

@@ -25,10 +25,13 @@ import {
   createJob,
   getJob,
   groundPhrase,
+  groundPoints,
   imageObjectUrl,
   streamJob,
   uploadImage,
   type Candidate,
+  type MaskPayload,
+  type PointPrompt,
   type UploadedImage,
 } from "@/lib/api";
 import {
@@ -43,9 +46,14 @@ import {
 } from "@/lib/edit-request";
 import { EMPTY_HISTORY, hasMask, type MaskHistory } from "@/lib/mask-history";
 import { maskFromStrokes, maskSize } from "@/lib/strokes";
+import { ORIGINAL, describe as describeEdit, record, type Version } from "@/lib/versions";
+import { BeforeAfter } from "./BeforeAfter";
 import { BrushCanvas } from "./BrushCanvas";
 import { CandidatePicker, REJECTED } from "./CandidatePicker";
+import { ImageDrop } from "./ImageDrop";
 import { MaskPreview } from "./MaskPreview";
+import { StepTimeline, type Step } from "./StepTimeline";
+import { VersionStrip } from "./VersionStrip";
 
 type Phase = "idle" | "uploading" | "grounding" | "running" | "done";
 
@@ -81,13 +89,24 @@ export function EditWorkspace() {
 
   const [mode, setMode] = useState<Mode>("describe");
   const [strokes, setStrokes] = useState<MaskHistory>(EMPTY_HISTORY);
+  const [taps, setTaps] = useState<PointPrompt[]>([]);
+  const [tapMask, setTapMask] = useState<MaskPayload | null>(null);
+  const [tapping, setTapping] = useState(false);
   const [candidates, setCandidates] = useState<Candidate[] | null>(null);
   const [ambiguous, setAmbiguous] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [selected, setSelected] = useState(0);
 
   const [progress, setProgress] = useState<Progress | null>(null);
+  const [steps, setSteps] = useState<Step[]>([]);
   const [resultUrl, setResultUrl] = useState<string | null>(null);
+  const [beforeUrl, setBeforeUrl] = useState<string | null>(null);
+
+  const [versions, setVersions] = useState<readonly Version[]>([]);
+  const [current, setCurrent] = useState(0);
+  // Object URLs keyed by digest. Held here rather than on `Version` so that stays a plain
+  // description of what exists, and so every URL has one owner that revokes it.
+  const urls = useRef<Map<string, string>>(new Map());
 
   const stopStream = useRef<(() => void) | null>(null);
   const spec = specFor(op);
@@ -96,7 +115,13 @@ export function EditWorkspace() {
   // in a session stays in memory for the life of the tab.
   useEffect(() => () => stopStream.current?.(), []);
   useEffect(() => () => { if (imageUrl !== null) URL.revokeObjectURL(imageUrl); }, [imageUrl]);
-  useEffect(() => () => { if (resultUrl !== null) URL.revokeObjectURL(resultUrl); }, [resultUrl]);
+  useEffect(() => {
+    const held = urls.current;
+    return () => {
+      for (const url of held.values()) URL.revokeObjectURL(url);
+      held.clear();
+    };
+  }, []);
 
   const reportError = (cause: unknown) => {
     setError(cause instanceof ApiError ? cause.message : "Something went wrong. Try again.");
@@ -120,8 +145,12 @@ export function EditWorkspace() {
    */
   const regionFor = useCallback((): Region => {
     if (mode === "draw") {
-      if (image === null || !hasMask(strokes)) return PHRASE;
-      const drawn = maskFromStrokes(strokes.strokes, maskSize(image.width, image.height));
+      if (image === null || (!hasMask(strokes) && tapMask === null)) return PHRASE;
+      const drawn = maskFromStrokes(
+        strokes.strokes,
+        maskSize(image.width, image.height),
+        tapMask,
+      );
       return drawn === null ? PHRASE : { kind: "drawn", mask: drawn };
     }
     if (candidates !== null && selected >= 0) {
@@ -129,22 +158,50 @@ export function EditWorkspace() {
       if (chosen !== undefined) return { kind: "chosen", mask: chosen };
     }
     return PHRASE;
-  }, [mode, image, strokes, candidates, selected]);
+  }, [mode, image, strokes, tapMask, candidates, selected]);
+
+  const resetRegion = useCallback(() => {
+    forgetRegion();
+    setStrokes(EMPTY_HISTORY);
+    setTaps([]);
+    setTapMask(null);
+  }, [forgetRegion]);
 
   async function onFile(file: File) {
-    forgetRegion();
+    resetRegion();
     setError(null);
     setResultUrl(null);
+    setSteps([]);
     setPhase("uploading");
     try {
       const uploaded = await uploadImage(getToken, file);
+      const url = URL.createObjectURL(file);
+      urls.current.set(uploaded.sha256, url);
       setImage(uploaded);
-      setImageUrl(URL.createObjectURL(file));
+      setImageUrl(url);
+      // A new picture is a new session's worth of history, not a branch of the old one.
+      setVersions([{ ...uploaded, label: ORIGINAL }]);
+      setCurrent(0);
       setPhase("idle");
     } catch (cause) {
       reportError(cause);
       setPhase("idle");
     }
+  }
+
+  /** Step back to an earlier result and edit *that* — the branch in the history. */
+  function onPickVersion(index: number) {
+    const version = versions[index];
+    const url = version === undefined ? undefined : urls.current.get(version.sha256);
+    if (version === undefined || url === undefined) return;
+    resetRegion();
+    setError(null);
+    setResultUrl(null);
+    setSteps([]);
+    setPhase("idle");
+    setCurrent(index);
+    setImage({ ...version, content_type: "image/png", megapixels: 0 });
+    setImageUrl(url);
   }
 
   async function onGround() {
@@ -170,20 +227,59 @@ export function EditWorkspace() {
     }
   }
 
+  /**
+   * Resolve a tap, with every tap so far.
+   *
+   * SAM takes the whole prompt each time rather than refining incrementally, so the
+   * accumulated list is sent and the answer replaces the previous one. That is what makes
+   * a second tap *improve* the selection instead of starting a new one.
+   */
+  async function onTap(point: PointPrompt) {
+    if (image === null) return;
+    const wanted = [...taps, point];
+    setTaps(wanted);
+    setTapping(true);
+    setError(null);
+    try {
+      const found = await groundPoints(getToken, image.sha256, wanted);
+      const mask = found.candidates[0]?.mask;
+      if (mask === undefined) {
+        setError("Nothing to select there. Try tapping the middle of it, or use the brush.");
+        setTaps(taps);
+      } else {
+        setTapMask(mask);
+      }
+    } catch (cause) {
+      reportError(cause);
+      setTaps(taps);
+    } finally {
+      setTapping(false);
+    }
+  }
+
   async function onRun() {
     if (image === null) return;
     setError(null);
     setResultUrl(null);
     setProgress(null);
+    setSteps([]);
+    setBeforeUrl(imageUrl);
     setPhase("running");
 
     const draft = { op, imageSha256: image.sha256, target, content, colour };
+    const label = describeEdit(op, target, content);
 
     try {
       const job = await createJob(getToken, buildJob(draft, regionFor()));
       stopStream.current = streamJob(getToken, job.id, (event) => {
         setProgress({ state: event.state, progress: event.progress, detail: event.detail });
-        if (event.terminal) void finish(job.id);
+        // The worker publishes a step per state change, including passes it rolled back.
+        setSteps((seen) =>
+          seen.length > 0 && seen[seen.length - 1]!.state === event.state && !event.detail
+            ? seen
+            : [...seen, { state: event.state, detail: event.detail }],
+        );
+        if (event.terminal) void finish(job.id, label);
       });
     } catch (cause) {
       reportError(cause);
@@ -192,23 +288,41 @@ export function EditWorkspace() {
   }
 
   const finish = useCallback(
-    async (id: string) => {
+    async (id: string, label: string) => {
       stopStream.current?.();
       try {
         const done = await getJob(getToken, id);
+        // The job's own steps are richer than the stream's: they carry timestamps, and any
+        // event that arrived while the tab was backgrounded is in them and not in the
+        // stream.
+        if (done.steps.length > 0) {
+          setSteps(done.steps.map((s) => ({ state: s.state, detail: s.detail, at: s.at })));
+        }
         if (done.result_sha256 === null) {
           setError(done.error ?? "The edit finished without producing an image.");
           setPhase("idle");
           return;
         }
-        setResultUrl(await imageObjectUrl(getToken, done.result_sha256));
+        const digest = done.result_sha256;
+        const url = await imageObjectUrl(getToken, digest);
+        urls.current.set(digest, url);
+        setResultUrl(url);
+        setVersions((history) =>
+          record(history, current, {
+            sha256: digest,
+            width: image?.width ?? 0,
+            height: image?.height ?? 0,
+            label,
+          }),
+        );
+        setCurrent((at) => Math.max(at, 0) + 1);
         setPhase("done");
       } catch (cause) {
         reportError(cause);
         setPhase("idle");
       }
     },
-    [getToken],
+    [getToken, current, image],
   );
 
   const busy = phase === "uploading" || phase === "grounding" || phase === "running";
@@ -228,21 +342,15 @@ export function EditWorkspace() {
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8">
       <section className="flex flex-col gap-3">
-        <label className="flex w-fit cursor-pointer items-center gap-2 rounded-md border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700">
-          <input
-            type="file"
-            accept="image/*"
-            className="sr-only"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file !== undefined) void onFile(file);
-            }}
-          />
-          {image === null ? "Choose a picture" : "Choose a different picture"}
-        </label>
+        <ImageDrop
+          onFile={(file) => void onFile(file)}
+          busy={phase === "uploading"}
+          replacing={image !== null}
+        />
         {image !== null ? (
           <p className="text-xs text-neutral-500 dark:text-neutral-400">
-            {image.width}×{image.height} · {image.megapixels.toFixed(1)} MP
+            {image.width}×{image.height}
+            {image.megapixels > 0 ? ` · ${image.megapixels.toFixed(1)} MP` : ""}
           </p>
         ) : null}
       </section>
@@ -254,6 +362,9 @@ export function EditWorkspace() {
             aspect={image.width / image.height}
             history={strokes}
             onChange={setStrokes}
+            base={tapMask}
+            onTap={(point) => void onTap(point)}
+            tapping={tapping}
           />
         ) : (
           <MaskPreview
@@ -279,6 +390,8 @@ export function EditWorkspace() {
                   // approval the user never gave to this one.
                   forgetRegion();
                   setStrokes(EMPTY_HISTORY);
+                  setTaps([]);
+                  setTapMask(null);
                 }}
                 className={`rounded-md border px-3 py-2 text-sm ${
                   choice.op === op
@@ -317,6 +430,27 @@ export function EditWorkspace() {
               >
                 Draw it
               </button>
+            </div>
+          ) : null}
+
+          {spec.examples.length > 0 && !drawing ? (
+            <div className="flex flex-wrap gap-2" aria-label="Example prompts" role="group">
+              {spec.examples.map(([exampleTarget, exampleContent]) => (
+                <button
+                  key={`${exampleTarget}|${exampleContent}`}
+                  type="button"
+                  onClick={() => {
+                    setTarget(exampleTarget);
+                    setContent(exampleContent);
+                    forgetRegion();
+                  }}
+                  className="rounded-full border border-neutral-300 px-3 py-1 text-xs text-neutral-600 dark:border-neutral-700 dark:text-neutral-400"
+                >
+                  {exampleContent && exampleTarget
+                    ? `${exampleTarget} → ${exampleContent}`
+                    : exampleTarget || exampleContent}
+                </button>
+              ))}
             </div>
           ) : null}
 
@@ -433,6 +567,7 @@ export function EditWorkspace() {
           <p className="text-xs text-neutral-500 dark:text-neutral-400">
             {progress.detail || progress.state}
           </p>
+          <StepTimeline steps={steps} />
         </section>
       ) : null}
 
@@ -444,21 +579,42 @@ export function EditWorkspace() {
 
       {resultUrl !== null && phase === "done" ? (
         <section className="flex flex-col gap-3">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={resultUrl}
-            alt="The edited picture"
-            className="max-h-[60vh] w-full rounded-lg object-contain"
-          />
-          <a
-            href={resultUrl}
-            download="editgpt.png"
-            className="w-fit rounded-md border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700"
-          >
-            Download
-          </a>
+          {beforeUrl !== null ? (
+            <BeforeAfter before={beforeUrl} after={resultUrl} />
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={resultUrl}
+              alt="The edited picture"
+              className="max-h-[60vh] w-full rounded-lg object-contain"
+            />
+          )}
+          <div className="flex flex-wrap gap-2">
+            <a
+              href={resultUrl}
+              download="editgpt.png"
+              className="rounded-md border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700"
+            >
+              Download
+            </a>
+            <button
+              type="button"
+              onClick={() => onPickVersion(current)}
+              className="rounded-md border border-neutral-300 px-3 py-2 text-sm dark:border-neutral-700"
+            >
+              Keep editing this
+            </button>
+          </div>
+          <StepTimeline steps={steps} />
         </section>
       ) : null}
+
+      <VersionStrip
+        versions={versions}
+        current={current}
+        urls={urls.current}
+        onPick={onPickVersion}
+      />
     </div>
   );
 }

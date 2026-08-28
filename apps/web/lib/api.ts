@@ -100,6 +100,40 @@ export interface Grounding {
   margin: number;
 }
 
+/** A tap, in fractions of the image. `include: false` excludes what came along with it. */
+export interface PointPrompt {
+  x: number;
+  y: number;
+  include?: boolean;
+}
+
+/**
+ * Ask what is under a tap. SAM only — no detector runs.
+ *
+ * The same endpoint and the same answer shape as `groundPhrase`, so the caller has one
+ * code path, but a different model behind it. Words having failed is the usual reason a
+ * user starts tapping, and re-running the model that failed to understand them would
+ * produce the same answer again.
+ *
+ * Always one candidate and never ambiguous: the user has already pointed at what they
+ * meant, so there is nothing to be ambiguous between.
+ */
+export async function groundPoints(
+  getToken: GetToken,
+  imageSha256: string,
+  points: readonly PointPrompt[],
+): Promise<Grounding> {
+  const response = await fetch(
+    `${GATEWAY_URL}/v1/masks`,
+    await authorized(getToken, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ image_sha256: imageSha256, points }),
+    }),
+  );
+  return response.ok ? response.json() : decode(response);
+}
+
 /**
  * Ask what a phrase refers to, without editing anything.
  *

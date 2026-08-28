@@ -109,6 +109,14 @@ grounds and returns ranked candidates; the job then carries the chosen mask. Gro
 cheap and reversible where an edit is neither, and separating them is what lets a user
 approve a region before any model time is spent.
 
+**Two prompts, one endpoint, different models.** `target` runs Grounding DINO and returns
+ranked candidates; `points` runs SAM alone and returns the one region under the taps,
+including negative points for what came along and should not have. They share a response
+so the client has a single code path. Keeping them separate is not tidiness: a tap is
+usually what a user reaches for *because* words failed, and re-running the model that just
+failed to understand them would cost 200 MB to give the same answer again. Measured on the
+same picture: a phrase takes ~6.9 s, a tap 0.4-1.2 s.
+
 **Ask only when the answer is shaky.** ADR-0003 measured 0.516 -> 0.832 on held-out
 RefCOCOg from offering five candidates, and gates on the top-two score margin at 0.15.
 Always-asking reaches 0.832 and was rejected: on 45% of phrases the detector scores 0.95

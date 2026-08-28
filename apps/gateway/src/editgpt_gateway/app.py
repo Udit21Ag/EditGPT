@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Iterator
-from typing import Annotated, Any
+from typing import Annotated, Any, Self
 from uuid import UUID
 
 from editgpt_core import (
@@ -31,7 +31,7 @@ from editgpt_core import (
 from editgpt_store import AssetNotFoundError, ProgressEvent, last_event, record_image, subscribe
 from fastapi import FastAPI, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from sqlalchemy.orm import Session, sessionmaker
 
 from editgpt_gateway import auth, limits, uploads
@@ -98,13 +98,42 @@ class MaskPayloadOut(BaseModel):
     counts: list[int]
 
 
+class PointPrompt(BaseModel):
+    """A tap, in fractions of the image so it survives every resize on the way here."""
+
+    x: float = Field(ge=0.0, le=1.0)
+    y: float = Field(ge=0.0, le=1.0)
+    include: bool = True
+    """False marks something the selection should *exclude* — the second half of the
+    interaction, where the user taps the part that came along and should not have."""
+
+
 class GroundRequest(BaseModel):
-    """Ask what a phrase refers to, before committing to an edit."""
+    """Ask what a region is, before committing to an edit.
+
+    Two ways to ask, and exactly one per request. A phrase runs the detector and returns
+    ranked candidates; taps run SAM alone and return the one region under them. They share
+    a response so the client has a single code path, and they are separate prompts because
+    they need different models — loading 200 MB of detector to answer a tap would be
+    paying for the model whose failure is usually why the user started tapping.
+    """
 
     image_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    target: str = Field(min_length=1, max_length=500)
+    target: str | None = Field(default=None, min_length=1, max_length=500)
     """The phrase to ground. Bounded because it is sent to a model with a fixed token
     budget, and an unbounded string there is a slow request a caller can ask for."""
+
+    points: list[PointPrompt] | None = Field(default=None, max_length=16)
+    """Taps to segment. Bounded for the same reason as the phrase: every extra point is
+    another prompt token, and a caller does not need sixteen to say what they mean."""
+
+    @model_validator(mode="after")
+    def _one_prompt(self) -> Self:
+        if (self.target is None) == (self.points is None):
+            raise ValueError("give either `target` or `points`, not both and not neither")
+        if self.points is not None and not self.points:
+            raise ValueError("`points` cannot be empty; send at least one tap")
+        return self
 
 
 class CandidateView(BaseModel):
@@ -399,7 +428,7 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         svc: ServicesDep,
         principal: PrincipalDep,
     ) -> GroundingView:
-        """Resolve a phrase to candidate regions without editing anything.
+        """Resolve a phrase or a tap to candidate regions without editing anything.
 
         Separate from job creation on purpose. Grounding is cheap and reversible; editing
         is neither, so a client that wants to show the user what will be changed should be
@@ -418,8 +447,16 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             raise HTTPException(404, f"no image {body.image_sha256}; upload it first")
 
         del principal  # the dependency is the check; ownership of an image is TD-019
+        task, argument = (
+            ("editgpt.ground", body.target)
+            if body.target is not None
+            else (
+                "editgpt.ground_points",
+                [[p.x, p.y, p.include] for p in body.points or []],
+            )
+        )
         try:
-            answer = svc.queue.call("editgpt.ground", body.image_sha256, body.target)
+            answer = svc.queue.call(task, body.image_sha256, argument)
         except NotImplementedError:
             raise HTTPException(503, "no worker is available to ground a phrase") from None
         except Exception as error:

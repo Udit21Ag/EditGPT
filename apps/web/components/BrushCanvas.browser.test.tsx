@@ -11,6 +11,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { BrushCanvas } from "./BrushCanvas";
 import { EMPTY_HISTORY, push, type MaskHistory } from "@/lib/mask-history";
+import type { PointPrompt } from "@/lib/api";
 
 /**
  * Rendered at an offset and at a size that is not its own.
@@ -25,11 +26,17 @@ import { EMPTY_HISTORY, push, type MaskHistory } from "@/lib/mask-history";
 const OFFSET = { left: 137, top: 61 };
 const DISPLAY = { width: 300, height: 240 };
 
-function show(history: MaskHistory = EMPTY_HISTORY) {
+function show(history: MaskHistory = EMPTY_HISTORY, onTap?: (p: PointPrompt) => void) {
   const onChange = vi.fn<(next: MaskHistory) => void>();
   const view = render(
     <div style={{ marginLeft: `${OFFSET.left}px`, marginTop: `${OFFSET.top}px` }}>
-      <BrushCanvas imageUrl={blank()} aspect={200 / 160} history={history} onChange={onChange} />
+      <BrushCanvas
+        imageUrl={blank()}
+        aspect={200 / 160}
+        history={history}
+        onChange={onChange}
+        onTap={onTap}
+      />
     </div>,
   );
   const canvas = view.container.querySelector("canvas") as HTMLCanvasElement;
@@ -131,9 +138,11 @@ describe("drawing", () => {
 });
 
 describe("the tools", () => {
-  it("switches to erasing, and the next stroke is an erase", () => {
+  it("switches to removing, and the next stroke lifts rather than paints", () => {
+    // The control is "Remove" rather than "Erase" because it now applies to tapping too:
+    // one word for taking something out, whichever tool is in hand.
     const { canvas, onChange } = show();
-    fireEvent.click(screen.getByRole("button", { name: "Erase" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
     drag(canvas, [0.3, 0.5], [0.6, 0.5]);
     expect(onChange.mock.calls[0]![0].strokes[0]!.mode).toBe("erase");
   });
@@ -169,5 +178,73 @@ describe("the tools", () => {
   it("prompts while the canvas is still empty", () => {
     show();
     expect(screen.getByText("Paint over what you want changed.")).toBeDefined();
+  });
+});
+
+
+describe("tapping to select", () => {
+  function tap(canvas: HTMLCanvasElement, [x, y]: [number, number], drift = 0) {
+    const box = canvas.getBoundingClientRect();
+    const point = (dx: number) => ({
+      clientX: box.left + (x + dx) * box.width,
+      clientY: box.top + y * box.height,
+      pointerId: 1,
+    });
+    fireEvent.pointerDown(canvas, point(0));
+    fireEvent.pointerUp(canvas, point(drift));
+  }
+
+  it("reports where the user tapped, in fractions of the picture", () => {
+    const onTap = vi.fn<(p: PointPrompt) => void>();
+    const { canvas } = show(EMPTY_HISTORY, onTap);
+
+    tap(canvas, [0.4, 0.6]);
+    expect(onTap).toHaveBeenCalledTimes(1);
+    const point = onTap.mock.calls[0]![0];
+    expect(point.x).toBeCloseTo(0.4, 2);
+    expect(point.y).toBeCloseTo(0.6, 2);
+    expect(point.include).toBe(true);
+  });
+
+  it("marks a tap as an exclusion once Remove is chosen", () => {
+    // The second half of the interaction: tap the thing, then tap what came along.
+    const onTap = vi.fn<(p: PointPrompt) => void>();
+    const { canvas } = show(EMPTY_HISTORY, onTap);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    tap(canvas, [0.4, 0.6]);
+    expect(onTap.mock.calls[0]![0].include).toBe(false);
+  });
+
+  it("ignores a press that travelled, which is a scroll and not a tap", () => {
+    // A finger never lands perfectly still; without the slop every stray pixel selects.
+    const onTap = vi.fn<(p: PointPrompt) => void>();
+    const { canvas } = show(EMPTY_HISTORY, onTap);
+
+    tap(canvas, [0.3, 0.5], 0.2);
+    expect(onTap).not.toHaveBeenCalled();
+  });
+
+  it("does not paint while the tap tool is in hand", () => {
+    const onTap = vi.fn<(p: PointPrompt) => void>();
+    const { canvas, onChange } = show(EMPTY_HISTORY, onTap);
+
+    drag(canvas, [0.2, 0.5], [0.8, 0.5]);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("paints again once the brush is chosen", () => {
+    const onTap = vi.fn<(p: PointPrompt) => void>();
+    const { canvas, onChange } = show(EMPTY_HISTORY, onTap);
+
+    fireEvent.click(screen.getByRole("button", { name: "Brush" }));
+    drag(canvas, [0.2, 0.5], [0.8, 0.5]);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onTap).not.toHaveBeenCalled();
+  });
+
+  it("offers no tap tool at all when the caller cannot resolve one", () => {
+    show();
+    expect(screen.queryByRole("button", { name: "Tap" })).toBeNull();
   });
 });

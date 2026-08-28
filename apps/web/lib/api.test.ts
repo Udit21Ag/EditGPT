@@ -3,6 +3,7 @@ import {
   ApiError,
   createJob,
   groundPhrase,
+  groundPoints,
   imageObjectUrl,
   streamJob,
   uploadImage,
@@ -198,5 +199,37 @@ describe("running the chosen candidate", () => {
     });
 
     expect(JSON.parse(String(fetchMock.mock.calls[0]![1]?.body)).mask).toEqual(mask);
+  });
+});
+
+describe("tapping to select", () => {
+  it("sends the taps rather than a phrase", async () => {
+    const fetchMock = respondWith({ candidates: [], ambiguous: false, margin: 0 });
+    await groundPoints(token, "d".repeat(64), [
+      { x: 0.25, y: 0.5 },
+      { x: 0.6, y: 0.4, include: false },
+    ]);
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toMatch(/\/v1\/masks$/);
+    const body = JSON.parse(String(init?.body));
+    expect(body.target).toBeUndefined();
+    expect(body.points).toEqual([
+      { x: 0.25, y: 0.5 },
+      { x: 0.6, y: 0.4, include: false },
+    ]);
+  });
+
+  it("shares the answer shape with grounding, so the caller has one code path", async () => {
+    respondWith({
+      candidates: [
+        { box: [0, 0, 1, 1], score: 0.97, mask: { width: 2, height: 2, counts: [4] }, label: "" },
+      ],
+      ambiguous: false,
+      margin: 1,
+    });
+    const found = await groundPoints(token, "d".repeat(64), [{ x: 0.5, y: 0.5 }]);
+    expect(found.candidates).toHaveLength(1);
+    expect(found.ambiguous).toBe(false);
   });
 });

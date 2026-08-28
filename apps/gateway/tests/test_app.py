@@ -98,3 +98,35 @@ def test_openapi_schema_is_generated(client: TestClient) -> None:
     schema = client.get("/openapi.json").json()
     assert schema["info"]["title"] == "EditGPT gateway"
     assert "/capabilities" in schema["paths"]
+
+
+# ---------------------------------------------------------------- grounding prompts
+
+
+def test_a_request_must_carry_exactly_one_kind_of_prompt(client: TestClient) -> None:
+    """A phrase and a tap need different models, so the request has to say which it is.
+
+    Both is not "use whichever" — it is a caller that has not decided, and answering one
+    of them silently would make the other look broken.
+    """
+    digest = "a" * 64
+    for body in (
+        {"image_sha256": digest},
+        {"image_sha256": digest, "target": "the car", "points": [{"x": 0.5, "y": 0.5}]},
+    ):
+        response = client.post("/v1/masks", json=body)
+        assert response.status_code == 422, response.text
+        assert "either `target` or `points`" in response.text
+
+    empty = client.post("/v1/masks", json={"image_sha256": digest, "points": []})
+    assert empty.status_code == 422
+    assert "at least one tap" in empty.text
+
+
+def test_a_tap_outside_the_picture_is_refused_at_the_boundary(client: TestClient) -> None:
+    """Fractions of the image, so anything outside 0..1 is a client bug worth naming."""
+    response = client.post(
+        "/v1/masks",
+        json={"image_sha256": "a" * 64, "points": [{"x": 1.4, "y": 0.5}]},
+    )
+    assert response.status_code == 422

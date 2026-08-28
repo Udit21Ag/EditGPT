@@ -420,3 +420,46 @@ def test_a_colour_that_is_not_a_colour_names_the_field(client: TestClient, uploa
     response = client.post("/v1/jobs", json=background_request(uploaded, colour="cornflower"))
     assert response.status_code == 422
     assert "colour" in response.text
+
+
+# ---------------------------------------------------------------- magic select
+
+EMPTY_GROUNDING: dict[str, Any] = {"candidates": [], "ambiguous": False, "margin": 0.0}
+"""A phrase matching nothing is a real answer, and the shortest valid one to hand back
+while asserting which task was dispatched."""
+
+
+def test_taps_are_dispatched_to_the_point_task_not_the_phrase_one(
+    client: TestClient, services: Services, uploaded: str
+) -> None:
+    """The routing that keeps a 200 MB detector out of a question that never asks it."""
+    queue = services.queue
+    assert isinstance(queue, RecordingQueue)
+    queue.answers["editgpt.ground_points"] = EMPTY_GROUNDING
+
+    client.post(
+        "/v1/masks",
+        json={
+            "image_sha256": uploaded,
+            "points": [{"x": 0.25, "y": 0.5}, {"x": 0.6, "y": 0.4, "include": False}],
+        },
+    )
+
+    assert queue.called, "nothing was dispatched"
+    name, args = queue.called[-1]
+    assert name == "editgpt.ground_points"
+    # Triples rather than objects: Celery serialises arguments as JSON.
+    assert args[1] == [[0.25, 0.5, True], [0.6, 0.4, False]]
+
+
+def test_a_phrase_still_goes_to_the_phrase_task(
+    client: TestClient, services: Services, uploaded: str
+) -> None:
+    queue = services.queue
+    assert isinstance(queue, RecordingQueue)
+    queue.answers["editgpt.ground"] = EMPTY_GROUNDING
+
+    client.post("/v1/masks", json={"image_sha256": uploaded, "target": "the car"})
+    name, args = queue.called[-1]
+    assert name == "editgpt.ground"
+    assert args[1] == "the car"

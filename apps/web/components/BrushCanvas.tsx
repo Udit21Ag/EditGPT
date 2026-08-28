@@ -37,6 +37,7 @@ import {
   type StrokeMode,
 } from "@/lib/mask-history";
 import { paint, type Size } from "@/lib/strokes";
+import type { MaskPayload, PointPrompt } from "@/lib/api";
 
 const TINT = "#3884ff";
 const CANVAS_SIDE = 1024;
@@ -45,12 +46,32 @@ const CANVAS_SIDE = 1024;
 export const BRUSH_SIZES = [0.02, 0.05, 0.1, 0.18] as const;
 export const DEFAULT_BRUSH = 0.05;
 
+/**
+ * The tool, and what it does.
+ *
+ * Two axes rather than four buttons in a row, because they compose: tapping and brushing
+ * both add and both remove, and a user who has learned "remove" for one has learned it
+ * for the other. It also keeps every control a thumb-sized target instead of a modifier
+ * key, which is not available on a phone.
+ */
+export type Tool = "tap" | "brush";
+export type Action = "add" | "remove";
+
+/** Below this movement a press is a tap, not a drag. */
+const TAP_SLOP = 0.01;
+
 export interface BrushCanvasProps {
   imageUrl: string;
   /** Width divided by height of the picture, so the canvas matches it. */
   aspect: number;
   history: MaskHistory;
   onChange: (history: MaskHistory) => void;
+  /** A region a tap selected, which strokes then add to and erase from. */
+  base?: MaskPayload | null;
+  /** Called when the user taps in `tap` mode. Undefined disables the tool. */
+  onTap?: (point: PointPrompt) => void;
+  /** Whether a tap is currently being resolved, so the canvas can say so. */
+  tapping?: boolean;
 }
 
 function displaySize(aspect: number): Size {
@@ -59,12 +80,23 @@ function displaySize(aspect: number): Size {
     : { width: Math.round(CANVAS_SIDE * aspect), height: CANVAS_SIDE };
 }
 
-export function BrushCanvas({ imageUrl, aspect, history, onChange }: BrushCanvasProps) {
+export function BrushCanvas({
+  imageUrl,
+  aspect,
+  history,
+  onChange,
+  base = null,
+  onTap,
+  tapping = false,
+}: BrushCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
-  const [mode, setMode] = useState<StrokeMode>("paint");
+  const [tool, setTool] = useState<Tool>(onTap === undefined ? "brush" : "tap");
+  const [action, setAction] = useState<Action>("add");
   const [width, setWidth] = useState<number>(DEFAULT_BRUSH);
   const [drawing, setDrawing] = useState<Stroke | null>(null);
+  const origin = useRef<[number, number] | null>(null);
+  const mode: StrokeMode = action === "add" ? "paint" : "erase";
 
   // Memoised because it is an effect dependency: rebuilt every render it would redraw the
   // canvas every render, which drops frames mid-stroke on a phone.
@@ -95,7 +127,7 @@ export function BrushCanvas({ imageUrl, aspect, history, onChange }: BrushCanvas
     // The in-progress stroke is drawn with the committed ones rather than separately, so
     // an erase in flight lifts what is already there instead of floating above it.
     const strokes = drawing === null ? history.strokes : [...history.strokes, drawing];
-    if (strokes.length === 0) return;
+    if (strokes.length === 0 && base === null) return;
 
     const overlay = document.createElement("canvas");
     overlay.width = size.width;
@@ -103,7 +135,7 @@ export function BrushCanvas({ imageUrl, aspect, history, onChange }: BrushCanvas
     const layer = overlay.getContext("2d");
     if (layer === null) return;
 
-    paint(layer, strokes, size);
+    paint(layer, strokes, size, base);
     // Recolour whatever was painted, leaving the untouched pixels transparent.
     layer.globalCompositeOperation = "source-in";
     layer.fillStyle = TINT;
@@ -112,7 +144,7 @@ export function BrushCanvas({ imageUrl, aspect, history, onChange }: BrushCanvas
     context.globalAlpha = 0.45;
     context.drawImage(overlay, 0, 0);
     context.globalAlpha = 1;
-  }, [image, history, drawing, size]);
+  }, [image, history, drawing, size, base]);
 
   const at = useCallback((event: React.PointerEvent<HTMLCanvasElement>): [number, number] => {
     const box = event.currentTarget.getBoundingClientRect();
@@ -126,7 +158,8 @@ export function BrushCanvas({ imageUrl, aspect, history, onChange }: BrushCanvas
 
   const start = (event: React.PointerEvent<HTMLCanvasElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
-    setDrawing({ mode, points: [at(event)], width });
+    origin.current = at(event);
+    if (tool === "brush") setDrawing({ mode, points: [at(event)], width });
   };
 
   const extend = (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -134,7 +167,19 @@ export function BrushCanvas({ imageUrl, aspect, history, onChange }: BrushCanvas
     setDrawing({ ...drawing, points: [...drawing.points, at(event)] });
   };
 
-  const finish = () => {
+  const finish = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const from = origin.current;
+    origin.current = null;
+
+    if (tool === "tap" && onTap !== undefined) {
+      // A press that travelled is a scroll or a mis-touch, not a tap. Without the slop a
+      // finger — which never lands perfectly still — selects on every stray pixel.
+      const [x, y] = at(event);
+      if (from !== null && Math.hypot(x - from[0], y - from[1]) <= TAP_SLOP) {
+        onTap({ x, y, include: action === "add" });
+      }
+      return;
+    }
     if (drawing === null) return;
     onChange(push(history, drawing));
     setDrawing(null);
@@ -158,26 +203,51 @@ export function BrushCanvas({ imageUrl, aspect, history, onChange }: BrushCanvas
         className="w-full touch-none rounded-lg bg-neutral-100 dark:bg-neutral-900"
       />
 
-      {/* Ordered for a thumb: the two that get used constantly sit at the near edge. */}
-      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Brush tools">
+      {/* Ordered for a thumb: what gets used constantly sits at the near edge. */}
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Selection tools">
+        {onTap !== undefined ? (
+          <button
+            type="button"
+            aria-pressed={tool === "tap"}
+            onClick={() => setTool("tap")}
+            className={`${button} ${tool === "tap" ? "bg-blue-50 dark:bg-blue-950/40" : ""}`}
+          >
+            Tap
+          </button>
+        ) : null}
         <button
           type="button"
-          aria-pressed={mode === "paint"}
-          onClick={() => setMode("paint")}
-          className={`${button} ${mode === "paint" ? "bg-blue-50 dark:bg-blue-950/40" : ""}`}
+          aria-pressed={tool === "brush"}
+          onClick={() => setTool("brush")}
+          className={`${button} ${tool === "brush" ? "bg-blue-50 dark:bg-blue-950/40" : ""}`}
         >
-          Paint
-        </button>
-        <button
-          type="button"
-          aria-pressed={mode === "erase"}
-          onClick={() => setMode("erase")}
-          className={`${button} ${mode === "erase" ? "bg-blue-50 dark:bg-blue-950/40" : ""}`}
-        >
-          Erase
+          Brush
         </button>
 
-        <span className="flex items-center gap-1" role="group" aria-label="Brush size">
+        <span className="mx-1 h-6 w-px bg-neutral-300 dark:bg-neutral-700" aria-hidden />
+
+        <button
+          type="button"
+          aria-pressed={action === "add"}
+          onClick={() => setAction("add")}
+          className={`${button} ${action === "add" ? "bg-blue-50 dark:bg-blue-950/40" : ""}`}
+        >
+          Add
+        </button>
+        <button
+          type="button"
+          aria-pressed={action === "remove"}
+          onClick={() => setAction("remove")}
+          className={`${button} ${action === "remove" ? "bg-blue-50 dark:bg-blue-950/40" : ""}`}
+        >
+          Remove
+        </button>
+
+        <span
+          className={`flex items-center gap-1 ${tool === "tap" ? "hidden" : ""}`}
+          role="group"
+          aria-label="Brush size"
+        >
           {BRUSH_SIZES.map((size_) => (
             <button
               key={size_}
@@ -215,11 +285,19 @@ export function BrushCanvas({ imageUrl, aspect, history, onChange }: BrushCanvas
         </button>
       </div>
 
-      {!hasMask(history) ? (
-        <p className="text-sm text-neutral-600 dark:text-neutral-400">
-          Paint over what you want changed.
-        </p>
-      ) : null}
+      <p className="text-sm text-neutral-600 dark:text-neutral-400" aria-live="polite">
+        {tapping
+          ? "Looking at what you tapped…"
+          : tool === "tap"
+            ? action === "add"
+              ? "Tap the thing you want changed. Tap again to add more of it."
+              : "Tap anything that came along and should not have."
+            : !hasMask(history) && base === null
+              ? "Paint over what you want changed."
+              : action === "add"
+                ? "Paint to add to the selection."
+                : "Paint to rub out part of the selection."}
+      </p>
     </div>
   );
 }

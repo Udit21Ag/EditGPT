@@ -126,6 +126,57 @@ def ground(digest: str, phrase: str) -> dict[str, object]:
     return found.model_dump(mode="json")
 
 
+@celery_app.task(name="editgpt.ground_points")  # type: ignore[untyped-decorator]
+def ground_points(digest: str, points: list[list[float]]) -> dict[str, object]:
+    """Resolve taps to a region. SAM only — no detector runs.
+
+    Separate from `ground` rather than a branch inside it because the two need different
+    models: a phrase needs Grounding DINO and the SAM encoder, a tap needs the encoder
+    alone. Sharing the entry point would load 200 MB of detector to answer a question that
+    never asks it.
+
+    `points` arrive as `[x, y, include]` triples because Celery serialises arguments as
+    JSON, and a tuple of mixed types survives that better as a list than as an object.
+
+    The answer is shaped like `ground`'s so the client has one code path: a single
+    candidate, never ambiguous. There is nothing to be ambiguous between — the user has
+    already pointed at what they meant.
+    """
+    from editgpt_core.rle import encode as encode_rle
+    from editgpt_core.spec import Grounding, MaskCandidate
+
+    from editgpt_worker.editors import decode_image, point_region, working_size
+
+    res = resources()
+    prompts = [(float(x), float(y), bool(include)) for x, y, include in points]
+    found = point_region(working_size(decode_image(res.assets.get(digest))), prompts)
+
+    log.info(
+        "ground_points.done",
+        extra={"points": len(prompts), "confidence": round(found.confidence, 3)},
+    )
+    if not found.mask.any():
+        return Grounding(candidates=[], ambiguous=False, margin=0.0).model_dump(mode="json")
+
+    ys, xs = found.mask.nonzero()
+    height, width = found.mask.shape[:2]
+    box = (
+        float(xs.min()) / width,
+        float(ys.min()) / height,
+        float(xs.max() + 1) / width,
+        float(ys.max() + 1) / height,
+    )
+    return Grounding(
+        candidates=[
+            MaskCandidate(
+                box=box, score=min(found.confidence, 1.0), mask_ref=encode_rle(found.mask)
+            )
+        ],
+        ambiguous=False,
+        margin=1.0,
+    ).model_dump(mode="json")
+
+
 class CancelledError(RuntimeError):
     """The job was cancelled between two checkpoints."""
 

@@ -183,6 +183,48 @@ def mask_from_box(
     return masks_from_boxes(encoder, decoder, rgb, [box])[0]
 
 
+def mask_from_points(
+    encoder: Any,
+    decoder: Any,
+    rgb: RGB,
+    points: Sequence[tuple[float, float, bool]],
+) -> Segmentation:
+    """A tap — or several — to the object under it.
+
+    Points are `(x, y, include)` in fractions of the image. SAM takes positive and
+    negative prompts together, which is the whole interaction: tap the thing, then tap the
+    part that came along with it and should not have.
+
+    No detector runs. That is the point of this path rather than a saving: it is what a
+    user reaches for when words have failed, and running the model that just failed to
+    understand them again would be the same answer a second time. `candidates_from_phrase`
+    is the lane for words.
+
+    Returns an empty `Segmentation` at zero confidence when SAM finds nothing under the
+    tap, which is a real answer — the caller says so rather than erasing a guess.
+    """
+    height, width = rgb.shape[:2]
+    if not points:
+        return Segmentation(mask=np.zeros((height, width), np.uint8), confidence=0.0, source="none")
+
+    embedding, scale = embed(encoder, rgb)
+    coords = np.array(
+        [[[x * width, y * height] for x, y, _ in points]],
+        dtype=np.float32,
+    )
+    labels = np.array([[1.0 if include else 0.0 for _, _, include in points]], dtype=np.float32)
+
+    # SAM's ONNX export expects a padding point when no box is given; without it the
+    # decoder reads the last prompt as a box corner and the mask tears along it.
+    coords = np.concatenate([coords, np.zeros((1, 1, 2), np.float32)], axis=1)
+    labels = np.concatenate([labels, np.full((1, 1), -1.0, np.float32)], axis=1)
+
+    mask, confidence = _decode(decoder, embedding, coords, labels, (height, width), scale)
+    if not mask.any():
+        return Segmentation(mask=mask, confidence=0.0, source="none")
+    return Segmentation(mask=mask, confidence=confidence, source="sam-point")
+
+
 def candidates_from_phrase(
     detector: Any,
     encoder: Any,

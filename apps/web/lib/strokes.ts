@@ -12,7 +12,7 @@
  * which is what `strokes.browser.test.ts` and the browser tier exist for.
  */
 
-import { encodeMask, type MaskPayload } from "./rle";
+import { decodeMask, encodeMask, type MaskPayload } from "./rle";
 import type { Stroke } from "./mask-history";
 
 export const MAX_MASK_SIDE = 2048;
@@ -47,9 +47,14 @@ export function paint(
   context: CanvasRenderingContext2D,
   strokes: readonly Stroke[],
   size: Size,
+  base: MaskPayload | null = null,
 ): void {
   const longest = Math.max(size.width, size.height);
   context.clearRect(0, 0, size.width, size.height);
+  // A region a tap selected, painted first so strokes add to and erase from it. Composing
+  // them is what lets magic select be a *starting point* rather than a separate answer:
+  // tap the object, then brush the bit SAM took with it.
+  if (base !== null) drawBase(context, base, size);
   context.lineCap = "round";
   context.lineJoin = "round";
 
@@ -85,8 +90,40 @@ export function paint(
   context.globalCompositeOperation = "source-over";
 }
 
+/**
+ * A mask onto a context, scaled to fit.
+ *
+ * Scaled rather than assumed to match: the server produces a mask at the resolution
+ * grounding ran at, which is bounded the same way but need not be identical, and a
+ * one-pixel disagreement would offset the whole selection.
+ */
+function drawBase(context: CanvasRenderingContext2D, base: MaskPayload, size: Size): void {
+  const pixels = decodeMask(base);
+  const source = document.createElement("canvas");
+  source.width = base.width;
+  source.height = base.height;
+  const into = source.getContext("2d");
+  if (into === null) return;
+
+  const image = into.createImageData(base.width, base.height);
+  for (let i = 0; i < pixels.length; i += 1) {
+    if (pixels[i] === 0) continue;
+    const at = i * 4;
+    image.data[at] = 255;
+    image.data[at + 1] = 255;
+    image.data[at + 2] = 255;
+    image.data[at + 3] = 255;
+  }
+  into.putImageData(image, 0, 0);
+  context.drawImage(source, 0, 0, size.width, size.height);
+}
+
 /** The painted pixels as a row-major `Uint8Array` of 0 and 1. */
-export function rasterise(strokes: readonly Stroke[], size: Size): Uint8Array {
+export function rasterise(
+  strokes: readonly Stroke[],
+  size: Size,
+  base: MaskPayload | null = null,
+): Uint8Array {
   const pixels = new Uint8Array(size.width * size.height);
   const canvas = document.createElement("canvas");
   canvas.width = size.width;
@@ -94,7 +131,7 @@ export function rasterise(strokes: readonly Stroke[], size: Size): Uint8Array {
   const context = canvas.getContext("2d");
   if (context === null) return pixels;
 
-  paint(context, strokes, size);
+  paint(context, strokes, size, base);
   const data = context.getImageData(0, 0, size.width, size.height).data;
   for (let i = 0; i < pixels.length; i += 1) {
     // Alpha, not colour: `destination-out` erases by clearing alpha, and the midpoint
@@ -110,8 +147,12 @@ export function rasterise(strokes: readonly Stroke[], size: Size): Uint8Array {
  * Null rather than an empty mask because an all-erase history is a real outcome the
  * caller has to handle — the button should be disabled, not the request rejected.
  */
-export function maskFromStrokes(strokes: readonly Stroke[], size: Size): MaskPayload | null {
-  const pixels = rasterise(strokes, size);
+export function maskFromStrokes(
+  strokes: readonly Stroke[],
+  size: Size,
+  base: MaskPayload | null = null,
+): MaskPayload | null {
+  const pixels = rasterise(strokes, size, base);
   if (!pixels.some((value) => value === 1)) return null;
   return encodeMask(pixels, size.width, size.height);
 }

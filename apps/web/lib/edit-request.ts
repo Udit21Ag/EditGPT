@@ -41,12 +41,22 @@ export interface OperationSpec {
   /** Placeholder for the target field, which differs a lot by operation. */
   readonly targetHint: string;
   readonly contentHint: string;
+  /**
+   * Ready-made prompts, as `[target, content]`.
+   *
+   * Not decoration. What this system can ground is narrower than what a person will type,
+   * and an empty box invites the sentence it handles worst — a relational one, which
+   * TD-012 measured as the third neither grounding model gets right. Showing the shape of
+   * a prompt that works is cheaper than explaining the shape of one that does not.
+   */
+  readonly examples: readonly (readonly [string, string])[];
 }
 
 export const OPERATIONS: readonly OperationSpec[] = [
   {
     op: "remove",
     label: "Remove",
+    examples: [["the car", ""], ["the person on the left", ""], ["the sign", ""]],
     picksColour: false,
     requiresTarget: true,
     acceptsTarget: true,
@@ -57,6 +67,7 @@ export const OPERATIONS: readonly OperationSpec[] = [
   {
     op: "replace",
     label: "Replace",
+    examples: [["the horse", "a white sheep grazing"], ["the sofa", "a leather armchair"]],
     picksColour: false,
     requiresTarget: true,
     acceptsTarget: true,
@@ -67,6 +78,7 @@ export const OPERATIONS: readonly OperationSpec[] = [
   {
     op: "add",
     label: "Add",
+    examples: [["the upper lip", "a realistic moustache"], ["the wall", "a framed picture"]],
     picksColour: false,
     requiresTarget: true,
     acceptsTarget: true,
@@ -79,6 +91,7 @@ export const OPERATIONS: readonly OperationSpec[] = [
     // subject is the fallback for when the border is not a uniform backdrop (TD-005).
     op: "background",
     label: "Background",
+    examples: [["the person", ""], ["", ""]],
     picksColour: true,
     requiresTarget: false,
     acceptsTarget: true,
@@ -89,6 +102,7 @@ export const OPERATIONS: readonly OperationSpec[] = [
   {
     op: "upscale",
     label: "Upscale",
+    examples: [],
     picksColour: false,
     requiresTarget: false,
     acceptsTarget: false,
