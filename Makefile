@@ -109,6 +109,12 @@ web-test:  ## Vitest
 web-build:  ## next build
 	$(WEB) build
 
+# Not in `check`: it needs Postgres, Redis, a gateway, a worker and ~550 MB of weights, and
+# the signed-in half needs a Clerk user. The smoke half runs with none of that beyond the
+# gateway and is what catches "the site does not build" and "the site does not run".
+e2e:  ## Full-stack browser tests. Needs the stack up; see docs/RUNBOOK.md
+	$(WEB) exec playwright test
+
 # The same paths `make lint` checks. They drifted once, and a file outside the fmt set
 # but inside the lint set fails CI with no local way to fix it.
 fmt:  ## Format everything in place

@@ -186,6 +186,24 @@ make eval-baseline           # accept the last run as the new baseline
 make memory                  # RSS tier, needs weights
 ```
 
+## Browser tests
+
+```bash
+make compose-up && make dev-lite &   # Postgres, Redis, the gateway
+make worker &                        # only needed for the signed-in flows
+make e2e                             # Playwright starts Next itself
+```
+
+`make e2e` is not part of `make check`: it needs a gateway and a database, and the
+signed-in half needs a Clerk user. That half **skips** unless `CLERK_E2E_EMAIL` and
+`CLERK_E2E_PASSWORD` are set — create a user in the development instance under Users,
+give it a password, and use it for nothing else. The smoke half needs none of that and
+is what catches "the site does not build" and "the site does not run", both of which
+happened.
+
+Run against something already deployed with `EDITGPT_E2E_URL=https://… make e2e`, which
+skips starting a local Next server.
+
 `evals/out/report.json` is the machine-readable result; the PNG strips are
 `original | mask | result`.
 

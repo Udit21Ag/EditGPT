@@ -207,6 +207,83 @@ jobs:
       - run: pnpm format:check
       - run: pnpm --filter @editgpt/web build
 
+  # The browser half of the stack, end to end. Separate from `web` because it needs a
+  # gateway and a database, and separate from `eval` because it needs neither the models
+  # nor the free-tier provider allowance: the smoke specs assert that the site builds,
+  # renders, and is refused without a session, which is what the `web` job cannot see.
+  #
+  # The signed-in flows skip unless CLERK_E2E_EMAIL and CLERK_E2E_PASSWORD are set as
+  # repository secrets, exactly as the `service`-marked Python tests skip without Postgres.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: editgpt
+          POSTGRES_PASSWORD: editgpt
+          POSTGRES_DB: editgpt
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U editgpt"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+      CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+      CLERK_E2E_EMAIL: ${{ secrets.CLERK_E2E_EMAIL }}
+      CLERK_E2E_PASSWORD: ${{ secrets.CLERK_E2E_PASSWORD }}
+      NEXT_PUBLIC_GATEWAY_URL: http://localhost:8000
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - run: uv python install 3.12
+      - run: uv sync --all-extras --frozen
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @editgpt/web exec playwright install --with-deps chromium
+
+      - name: Start the gateway
+        run: |
+          uv run uvicorn editgpt_gateway.app:app --port 8000 &
+          for _ in $(seq 1 40); do
+            curl -sf http://localhost:8000/health >/dev/null && exit 0
+            sleep 2
+          done
+          echo "the gateway never became healthy"; exit 1
+
+      - name: Browser flows
+        run: make e2e
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+
   commits:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'

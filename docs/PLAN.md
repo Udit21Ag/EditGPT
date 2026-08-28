@@ -456,11 +456,17 @@ minaret, and choosing the second candidate erased the left-hand one — 96.0% of
 region changed against 0.0% of the top-ranked one. A painted stroke erased 87.6% of itself
 and 0.8% outside it.
 
-**Not yet:** pan/zoom, lasso, magic select, before/after slider, version history, quota
-display, the a11y pass, and the bottom-sheet layout. Playwright E2E of the two headline
-flows is not done either — the canvas work is covered by a real-Chromium Vitest tier
-(`harness/testing.md`), but a full-stack browser flow needs a Clerk test user and CI
-secrets, which is a decision rather than a task.
+**Delivered 29 Aug 2026**, continuing: **magic select** (tap → MobileSAM, with negative
+points; ~0.5 s against ~6.9 s for a phrase, and it seeds the brush rather than replacing
+it), drop/paste/camera upload, the **before/after wipe**, **version history with
+branch-from-version**, the per-step timeline the worker was already publishing, and
+example prompts. Playwright is in place: the smoke flows run with no credentials and pass
+against the real stack; the two signed-in headline flows are written and **skip** until a
+Clerk test user exists.
+
+**Not yet:** pan/zoom, lasso, mask-overlay opacity, quota display, a full a11y audit
+(labels, roles and live regions are in place; contrast and focus order are not audited),
+the bottom-sheet mobile layout, and Lighthouse ≥90.
 
 **Exit:** Lighthouse ≥90 across the board on mobile; both flows pass E2E.
 

@@ -79,6 +79,23 @@ Two traps that suite found, both worth knowing before writing another:
   mask covers 0.0848 by construction, and 0.0850 was measured. A number that matches a
   closed form is worth asserting; a number that was merely observed is a recording.
 
+## Full-stack browser tests
+
+`apps/web/e2e/`, run by Playwright through `make e2e`, and **not** in `make check`: they
+need a gateway, a database and — for the signed-in half — a Clerk user.
+
+They answer a different question from the `browser` Vitest project. That one drives the
+same components with `fetch` replaced and proves the *client* works; this proves the
+*deployment* does, with Clerk really issuing a session and the gateway really accepting
+it. Both exist because they fail for different reasons.
+
+The smoke specs need no credentials and run on every checkout. They assert what the two
+real frontend failures would have tripped: the page serves 200 and renders without console
+errors, the editor is absent rather than hidden for a signed-out visitor, the gateway is
+ready, and an unauthenticated edit is a 401. The signed-in specs skip without
+`CLERK_E2E_EMAIL` and `CLERK_E2E_PASSWORD` — the same shape as `service`, and for the same
+reason: a fresh checkout stays green and CI runs them where the secrets exist.
+
 ## Regression tests
 
 Every meaningful bug fix gets a test that fails before the fix. Name the incident:

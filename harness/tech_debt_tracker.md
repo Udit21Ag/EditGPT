@@ -57,6 +57,7 @@ paid. It still stays visible.
 | TD-021 | Edits come back at 2048 px, not the uploaded resolution      | resolved | P1       | worker     |
 | TD-022 | A provider's blank frame was composited as a result          | resolved | P1       | providers  |
 | TD-023 | A phrase matching nothing still returns a confident region  | open     | P2       | models     |
+| TD-024 | Route protection is middleware path matching, which Clerk deprecated | open     | P2       | web        |
 
 ---
 
@@ -615,3 +616,23 @@ different question and needs its own measurement rather than a guessed threshold
 **Resolution:** measure whether the top score separates present from absent phrases on a
 held-out set with negatives — `benchmarks/ambiguity.py` has the harness — and if it does,
 abstain below it rather than answering.
+
+### TD-024 — Route protection is middleware path matching, which Clerk deprecated
+
+Status: open · Priority: P2 · Identified: 2026-08-29 · Area: `apps/web`
+**Problem:** `middleware.ts` protects pages with `createRouteMatcher`, which Clerk Core 3
+deprecates with a security rationale rather than a stylistic one: "middleware-based auth
+checks rely on path matching, which can diverge from how Next.js routes requests and leave
+protected resources reachable." It prints on every dev server start.
+**Why it matters:** the divergence is the point. A path pattern and Next's router are two
+different opinions about what a URL means, and the gap between them is reachable.
+**Why it is not urgent here:** the gateway is the real boundary and it fails closed —
+`apps/web/e2e/smoke.spec.ts` asserts an unauthenticated `POST /v1/jobs` is a 401. The middleware
+decides which *pages* render, not what data anyone can reach, so a divergence would show a
+signed-out visitor an empty editor rather than anybody's pictures.
+**Workaround:** none needed; the allowlist is of public routes, so anything new is
+protected by default.
+**Trigger:** a page that reads protected data during render, or the removal of
+`createRouteMatcher` in Clerk's next major.
+**Resolution:** move the check into each page and layout that reads protected data, per
+Clerk's migration guide, and keep the middleware for redirects only.
