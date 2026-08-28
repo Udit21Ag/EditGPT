@@ -25,6 +25,15 @@ the two traps that suite found.
   under `globals: true`, and this project imports `describe`/`it` explicitly; without it
   every render stays in the document and a test asking for two options is handed fifty.
 
+## Choosing a region
+
+Three ways, and they compose: a **phrase** (ranked candidates — the chooser, see
+`harness/architecture.md`), a **tap** (`POST /v1/masks` with `points`; SAM alone, ~0.5 s
+against ~6.9 s for a phrase), and the **brush**. A tap seeds the mask and strokes add to
+and erase from it, so magic select is a starting point rather than a fourth answer.
+`mask_source` records which, and the worker acts on the difference — it will not
+second-guess a `brush`.
+
 ## Masks
 
 Store **strokes, not bitmaps**. A stroke is a few hundred bytes; a 15.9 MP mask is ~16 MB,
