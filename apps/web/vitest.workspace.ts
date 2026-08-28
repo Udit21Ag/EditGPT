@@ -37,7 +37,7 @@ export default defineWorkspace([
     resolve: { alias },
     test: {
       name: "browser",
-      setupFiles: ["./vitest.setup.ts"],
+      setupFiles: ["./vitest.setup.ts", "./vitest.setup.browser.ts"],
       include: [BROWSER],
       exclude: ["node_modules/**", ".next/**"],
       browser: {
