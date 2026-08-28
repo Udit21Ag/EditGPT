@@ -195,6 +195,12 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      # The browser tier in `vitest.workspace.ts` runs the canvas code in a real Chromium,
+      # because jsdom has no 2-D context and the picker's drawing had never executed
+      # anywhere. `--with-deps` because the GitHub runner lacks the shared libraries.
+      - run: pnpm --filter @editgpt/web exec playwright install --with-deps chromium
+
       - run: pnpm --filter @editgpt/web lint
       - run: pnpm --filter @editgpt/web typecheck
       - run: pnpm --filter @editgpt/web test
