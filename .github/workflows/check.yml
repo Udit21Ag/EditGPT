@@ -87,10 +87,15 @@ jobs:
   # than a check. The generative cases are excluded: they spend a daily free-tier
   # allowance shared with development, and burning it per push would make the golden set
   # unrunnable — the state this was meant to escape, not enter.
+  #
+  # Runs on pushes as well as pull requests, because this repository is worked by pushing
+  # to `main` — there are no merge commits in its history. Gated on pull requests, as it
+  # first shipped, this job would simply never have run, which is the same nothing it was
+  # written to replace. On a push there is no pull request to comment on, so the diff goes
+  # to the run's job summary and the images to an artifact either way.
   eval:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: github.event_name == 'pull_request'
     permissions:
       contents: read
       pull-requests: write
@@ -131,9 +136,24 @@ jobs:
           name: eval-images
           path: evals/out
 
-      # The images are the arbiter, so the comment's job is to say which ones to open.
-      - uses: actions/github-script@v7
+      # The images are the arbiter, so both write-ups exist to say which ones to open.
+      - name: Write the diff to the run summary
         if: always()
+        env:
+          REPORT: ${{ steps.diff.outputs.report }}
+        run: |
+          {
+            echo "### Golden set"
+            echo
+            echo "$REPORT"
+            echo
+            echo "Images are attached to this run as \`eval-images\`."
+            echo "Cost is a proxy this project has measured as unreliable (TD-017) —"
+            echo "open the picture before trusting the number."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/github-script@v7
+        if: always() && github.event_name == 'pull_request'
         with:
           script: |
             const body = `### Golden set\n\n${{ toJSON(steps.diff.outputs.report) }}\n\n`

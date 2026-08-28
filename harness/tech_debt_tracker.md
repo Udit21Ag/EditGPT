@@ -219,8 +219,14 @@ undercuts the whole point of having a golden set.
 every push without a budget decision.
 **Trigger:** any quality regression that reaches `main`.
 **Resolved 2026-08-28.** `evals/diff.py` compares a run against a committed
-`evals/baseline.json`; the `eval` job in `check.yml` runs `make eval-local` on every pull
-request, comments the diff, and uploads the images as an artifact. `make eval-baseline`
+`evals/baseline.json`; the `eval` job in `check.yml` runs `make eval-local`, publishes the
+diff, and uploads the images as an artifact.
+
+**Corrected 2026-08-29**, because the first version would never have run. It was gated on
+`pull_request`, and this repository is worked by pushing to `main` — its history has no
+merge commits at all. A check that cannot fire is the same nothing it replaced. It now
+runs on pushes too: the diff goes to the run's job summary always, and to a pull request
+comment when there is one. `make eval-baseline`
 records a new baseline once a human has looked at the pictures.
 
 **What blocks and what only reports, and why the split is not arbitrary.** A case that
