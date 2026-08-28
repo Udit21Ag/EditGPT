@@ -109,6 +109,21 @@ export function groundable(op: Operation, target: string): boolean {
   return specFor(op).acceptsTarget && target.trim().length > 0;
 }
 
+/**
+ * Where the region came from, which the server treats three different ways.
+ *
+ * Explicit rather than a nullable mask plus an inferred source: a grounded phrase, a
+ * candidate the user picked and a region the user drew are three different claims, and
+ * the worker acts on the difference — it will not second-guess a brushed mask, and it
+ * grounds a phrase only when no mask arrives with it.
+ */
+export type Region =
+  | { readonly kind: "phrase" }
+  | { readonly kind: "chosen"; readonly mask: MaskPayload }
+  | { readonly kind: "drawn"; readonly mask: MaskPayload };
+
+export const PHRASE: Region = { kind: "phrase" };
+
 export interface Draft {
   readonly op: Operation;
   readonly imageSha256: string;
@@ -119,10 +134,14 @@ export interface Draft {
 }
 
 /** Whether the form is complete enough to send. Mirrors `EditSpec`'s own rules. */
-export function ready(draft: Draft): boolean {
+export function ready(draft: Draft, region: Region = PHRASE): boolean {
   const spec = specFor(draft.op);
   if (draft.imageSha256.length === 0) return false;
-  if (spec.requiresTarget && draft.target.trim().length === 0) return false;
+  // A drawn region *is* the answer to "what to change", so it stands in for the phrase.
+  // `EditSpec` says the same: remove needs either a target or an explicit mask.
+  if (spec.requiresTarget && region.kind !== "drawn" && draft.target.trim().length === 0) {
+    return false;
+  }
   // A colour is a complete answer to "what goes there", so it satisfies the same rule.
   if (spec.needsContent && !spec.picksColour && draft.content.trim().length === 0) return false;
   if (spec.picksColour && !/^#[0-9a-fA-F]{6}$/.test(draft.colour)) return false;
@@ -137,23 +156,26 @@ export function ready(draft: Draft): boolean {
  * discard it — and it saves the worker grounding a phrase that has already been grounded,
  * which is the detector and the SAM encoder, about two seconds and 2 GB.
  *
- * `mask_source` stays `text` even with a mask attached, because that is where the region
- * came from. A brushed mask means something different downstream: the worker will not
- * second-guess it.
+ * `mask_source` records where the region came from, and the difference is load-bearing:
+ * `text` is a model's guess the user approved, `brush` is the user's own and the worker
+ * will not second-guess it.
  */
-export function buildJob(draft: Draft, mask: MaskPayload | null): CreateJob {
+export function buildJob(draft: Draft, region: Region = PHRASE): CreateJob {
   const target = draft.target.trim();
   const request: CreateJob = {
     op: draft.op,
     image_sha256: draft.imageSha256,
-    // Keyed off whether a phrase was actually given, not off whether the operation
-    // demands one. `background` accepts a target without requiring it, so anything else
-    // would label a grounded region `whole` — a request that contradicts itself.
-    mask_source: target.length > 0 ? "text" : "whole",
+    // Otherwise keyed off whether a phrase was actually given, not off whether the
+    // operation demands one. `background` accepts a target without requiring it, so
+    // anything else would label a grounded region `whole` — a request contradicting
+    // itself.
+    mask_source: region.kind === "drawn" ? "brush" : target.length > 0 ? "text" : "whole",
   };
-  if (target.length > 0) request.target = target;
+  // A drawn region answers for itself. Sending the phrase alongside would invite a
+  // reading of the mask as something a model produced from those words.
+  if (target.length > 0 && region.kind !== "drawn") request.target = target;
   if (draft.content.trim().length > 0) request.content = draft.content.trim();
   if (specFor(draft.op).picksColour) request.colour = draft.colour.toLowerCase();
-  if (mask !== null) request.mask = mask;
+  if (region.kind !== "phrase") request.mask = region.mask;
   return request;
 }

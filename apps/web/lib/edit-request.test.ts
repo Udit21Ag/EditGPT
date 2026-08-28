@@ -7,7 +7,15 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { OPERATIONS, buildJob, groundable, ready, specFor, type Draft } from "./edit-request";
+import {
+  OPERATIONS,
+  PHRASE,
+  buildJob,
+  groundable,
+  ready,
+  specFor,
+  type Draft,
+} from "./edit-request";
 
 const draft = (over: Partial<Draft> = {}): Draft => ({
   op: "remove",
@@ -68,17 +76,17 @@ describe("building the request", () => {
   const mask = { width: 4, height: 3, counts: [4, 1, 7] };
 
   it("carries the region the user approved", () => {
-    expect(buildJob(draft(), mask).mask).toEqual(mask);
+    expect(buildJob(draft(), { kind: "chosen", mask }).mask).toEqual(mask);
   });
 
   it("calls a grounded region 'text', not 'brush'", () => {
     // The distinction is load-bearing downstream: the worker does not second-guess a
     // brushed mask, and this one came from a model.
-    expect(buildJob(draft(), mask).mask_source).toBe("text");
+    expect(buildJob(draft(), { kind: "chosen", mask }).mask_source).toBe("text");
   });
 
   it("calls it 'whole' when no phrase was given", () => {
-    const request = buildJob(draft({ op: "background", target: "", content: "" }), null);
+    const request = buildJob(draft({ op: "background", target: "", content: "" }), PHRASE);
     expect(request.mask_source).toBe("whole");
     expect(request.target).toBeUndefined();
   });
@@ -86,31 +94,34 @@ describe("building the request", () => {
   it("sends the backdrop colour as an exact value, not a description", () => {
     // TD-020: "change the background to blue" returned green and reported success,
     // because nothing downstream read the description.
-    const request = buildJob(draft({ op: "background", target: "", colour: "#3366FF" }), null);
+    const request = buildJob(draft({ op: "background", target: "", colour: "#3366FF" }), PHRASE);
     expect(request.colour).toBe("#3366ff");
   });
 
   it("does not attach a colour to an operation that does not paint one", () => {
-    expect(buildJob(draft({ op: "remove" }), null).colour).toBeUndefined();
+    expect(buildJob(draft({ op: "remove" }), PHRASE).colour).toBeUndefined();
   });
 
   it("does not label a grounded region 'whole' just because the phrase was optional", () => {
     // The incoherence this guards against: background does not *require* a target, so
     // keying the source off the requirement would attach a mask and call it the whole
     // image.
-    const request = buildJob(draft({ op: "background", target: "the person", content: "green" }), mask);
+    const request = buildJob(draft({ op: "background", target: "the person", content: "green" }), {
+      kind: "chosen",
+      mask,
+    });
     expect(request.mask_source).toBe("text");
     expect(request.mask).toEqual(mask);
   });
 
   it("trims what the user typed rather than sending their whitespace to a model", () => {
-    const request = buildJob(draft({ target: "  the car  ", content: " " }), null);
+    const request = buildJob(draft({ target: "  the car  ", content: " " }), PHRASE);
     expect(request.target).toBe("the car");
     expect(request.content).toBeUndefined();
   });
 
   it("omits the mask when there is none, leaving the worker to ground the phrase", () => {
-    expect(buildJob(draft(), null).mask).toBeUndefined();
+    expect(buildJob(draft(), PHRASE).mask).toBeUndefined();
   });
 });
 
@@ -134,5 +145,41 @@ describe("the operation list", () => {
 
   it("raises on an operation it does not know, rather than silently doing nothing", () => {
     expect(() => specFor("restyle" as never)).toThrow(/unknown operation/);
+  });
+});
+
+// ------------------------------------------------------------------ a drawn region
+
+describe("a region the user painted", () => {
+  const drawn = { kind: "drawn", mask: { width: 4, height: 3, counts: [4, 1, 7] } } as const;
+
+  it("stands in for the phrase a remove would otherwise need", () => {
+    // `EditSpec` says the same thing: remove needs either a target or an explicit mask.
+    // Without this the brush would be unreachable for the operation that needs it most.
+    expect(ready(draft({ target: "" }), drawn)).toBe(true);
+    expect(ready(draft({ target: "" }), PHRASE)).toBe(false);
+  });
+
+  it("is labelled brush, which is what stops the worker second-guessing it", () => {
+    expect(buildJob(draft({ target: "" }), drawn).mask_source).toBe("brush");
+  });
+
+  it("does not carry the phrase alongside it", () => {
+    // A mask painted by hand described as `text` invites the reading that a model
+    // produced it from those words.
+    const request = buildJob(draft({ target: "the car" }), drawn);
+    expect(request.target).toBeUndefined();
+    expect(request.mask).toEqual(drawn.mask);
+  });
+
+  it("still needs content for an operation that generates something", () => {
+    expect(ready(draft({ op: "replace", target: "", content: "" }), drawn)).toBe(false);
+    expect(ready(draft({ op: "replace", target: "", content: "a sheep" }), drawn)).toBe(true);
+  });
+
+  it("is distinguishable from a candidate the user chose", () => {
+    const chosen = { kind: "chosen", mask: drawn.mask } as const;
+    expect(buildJob(draft(), chosen).mask_source).toBe("text");
+    expect(buildJob(draft({ target: "" }), drawn).mask_source).toBe("brush");
   });
 });

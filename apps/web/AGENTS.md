@@ -13,22 +13,26 @@ Next.js 15 App Router, TypeScript strict, Tailwind v4.
 
 ## Vitest
 
-`vitest.config.ts` carries two things that are easy to lose and awkward to diagnose:
+Two projects, in `vitest.workspace.ts`: `unit` on jsdom and `browser` in a real Chromium
+for `*.browser.test.{ts,tsx}`. **Canvas, pointer and layout code is only verified in the
+browser project** — jsdom has no 2-D context. `harness/testing.md` has the reasoning and
+the two traps that suite found.
 
 - **`resolve.alias` for `@/`.** tsconfig `paths` only teaches the type checker; without
   the same mapping here, a component importing `@/lib/...` type-checks and then fails to
   resolve the moment a test renders it.
-- **`vitest.setup.ts`.** Testing Library registers its own cleanup only under
-  `globals: true`, and this project imports `describe`/`it` explicitly. Without it every
-  render stays in the document: the symptom is a test that asks for two options and is
-  handed fifty. The same file makes `canvas.getContext` return null, which is what jsdom
-  means anyway and replaces a page of stderr per render.
+- **`vitest.setup.ts`** unmounts between tests. Testing Library registers that itself only
+  under `globals: true`, and this project imports `describe`/`it` explicitly; without it
+  every render stays in the document and a test asking for two options is handed fifty.
 
 ## Masks
 
 Store **strokes, not bitmaps**. A stroke is a few hundred bytes; a 15.9 MP mask is ~16 MB,
 so a 50-step history costs kilobytes instead of gigabytes. Points are normalised to 0..1
-so a stroke survives a resize and replays correctly after a zoom.
+so a stroke survives a resize and replays correctly after a zoom. `lib/strokes.ts`
+rasterises them only at submission, through the same `paint` the live overlay uses — a
+preview disagreeing with what was sent is the worst bug available here, because the user
+approved the preview.
 
 ## Mobile matters
 

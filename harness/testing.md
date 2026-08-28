@@ -54,6 +54,31 @@ measured as unreliable (TD-017), and TD-004 is the worked example: a change that
 ruined `i8` moved cost 3.2% and moved the result thumbnail 0.400. A clean diff is not
 evidence the pictures are fine; a flagged case is an instruction to open one.
 
+## The web tiers
+
+`apps/web` runs two Vitest projects, declared in `vitest.workspace.ts`.
+
+| Project   | Environment    | Runs                        |
+| --------- | -------------- | --------------------------- |
+| `unit`    | jsdom          | everything else             |
+| `browser` | real Chromium  | `*.browser.test.{ts,tsx}`   |
+
+The split is not a preference. jsdom has no 2-D canvas context, so `vitest.setup.jsdom.ts`
+makes `getContext` return null and every component test runs against the degradation path.
+The candidate picker shipped with fifteen passing tests and its crop arithmetic, mask
+overlay and image decoding had never executed anywhere. **If a change touches a canvas, a
+pointer or layout, it is not verified until it runs in the `browser` project.**
+
+Two traps that suite found, both worth knowing before writing another:
+
+- **Tailwind is not loaded there.** A canvas lays out at its intrinsic size at the origin,
+  so `getBoundingClientRect` gives a box 1024 wide at (0, 0). Pointer arithmetic that
+  forgets to subtract `left`, or that divides by a constant near 1000, passes against that
+  geometry. Give the element a real offset and a size that is not its own.
+- **Assert against geometry you can compute.** A stroke 0.6 long and 0.1 wide on a 200x160
+  mask covers 0.0848 by construction, and 0.0850 was measured. A number that matches a
+  closed form is worth asserting; a number that was merely observed is a recording.
+
 ## Regression tests
 
 Every meaningful bug fix gets a test that fails before the fix. Name the incident:

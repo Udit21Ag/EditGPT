@@ -435,13 +435,32 @@ budget enforcement (wall-clock, retries, cents) · CriticAgent scoring + bounded
 
 **Exit:** critic-triggered retry demonstrably fixes a seeded failure case in the eval set.
 
-### Phase 8 — Frontend (7–9 days)
+### Phase 8 — Frontend (7–9 days) · **in progress**
 
 Landing · Clerk auth · upload (drag/drop, paste, camera on mobile) · **canvas editor**: pan/zoom, brush/eraser with
 size slider, lasso, "magic select" (tap → MobileSAM), mask overlay opacity, undo/redo · prompt bar with op chips and
 example prompts · live progress with per-agent step timeline (this is your demo money-shot) · before/after slider ·
 version history & branch-from-version · download/share · quota display · full a11y pass · mobile layout with
 bottom-sheet tools. Playwright E2E for the two headline flows.
+
+**Delivered, 28–29 Aug 2026.** Landing and Clerk auth; upload; op chips; the **candidate
+picker** ADR-0003 measured and nothing could reach; live SSE progress; result and download;
+**brush/eraser** with size, undo/redo and clear, on pointer events so a finger and a mouse
+take one code path. Two things had to be fixed first: the site had never built (Clerk Core
+3 replaced the control components with stubs that throw at render) and had never run (Next
+reads `.env` from `apps/web`, not the repository root).
+
+**Verified live** against a real gateway, worker, Postgres and Redis. "the minaret" on the
+Taj Mahal grounds ambiguously at margin 0.089; the detector's top pick is the right-hand
+minaret, and choosing the second candidate erased the left-hand one — 96.0% of the chosen
+region changed against 0.0% of the top-ranked one. A painted stroke erased 87.6% of itself
+and 0.8% outside it.
+
+**Not yet:** pan/zoom, lasso, magic select, before/after slider, version history, quota
+display, the a11y pass, and the bottom-sheet layout. Playwright E2E of the two headline
+flows is not done either — the canvas work is covered by a real-Chromium Vitest tier
+(`harness/testing.md`), but a full-stack browser flow needs a Clerk test user and CI
+secrets, which is a decision rather than a task.
 
 **Exit:** Lighthouse ≥90 across the board on mobile; both flows pass E2E.
 

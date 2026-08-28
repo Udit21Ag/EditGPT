@@ -11,6 +11,7 @@ import fixtures from "./rle-fixtures.json";
 import {
   areaPx,
   decodeMask,
+  encodeMask,
   maskBounds,
   tintCanvas,
   tintPixels,
@@ -160,5 +161,38 @@ describe("tintCanvas", () => {
     const mask: MaskPayload = cases.wide!.rle;
     const canvas = tintCanvas(mask, [0, 128, 255]);
     expect([canvas.width, canvas.height]).toEqual([mask.width, mask.height]);
+  });
+});
+
+describe("encodeMask", () => {
+  for (const [name, fixture] of Object.entries(cases)) {
+    it(`produces the same bytes Python does for '${name}'`, () => {
+      const pixels = Uint8Array.from(fixture.mask.flat());
+      const { width, height } = fixture.rle;
+      expect(encodeMask(pixels, width, height).counts).toEqual(fixture.rle.counts);
+    });
+  }
+
+  it("round-trips every fixture", () => {
+    for (const fixture of Object.values(cases)) {
+      const pixels = decodeMask(fixture.rle);
+      const again = encodeMask(pixels, fixture.rle.width, fixture.rle.height);
+      expect(Array.from(decodeMask(again))).toEqual(Array.from(pixels));
+    }
+  });
+
+  it("opens with a zero-length run when the very first pixel is set", () => {
+    // The convention that makes odd runs the set ones. Skipping the empty opening run
+    // inverts the whole mask, which is the kind of bug that looks like a bad model.
+    const pixels = Uint8Array.from([1, 1, 0, 0]);
+    expect(encodeMask(pixels, 2, 2).counts[0]).toBe(0);
+  });
+
+  it("counts sum to the pixel count, which is what MaskRef validates", () => {
+    for (const fixture of Object.values(cases)) {
+      const { width, height } = fixture.rle;
+      const encoded = encodeMask(decodeMask(fixture.rle), width, height);
+      expect(encoded.counts.reduce((a, b) => a + b, 0)).toBe(width * height);
+    }
   });
 });

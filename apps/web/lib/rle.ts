@@ -49,6 +49,38 @@ export function decodeMask(mask: MaskPayload): Uint8Array {
   return out;
 }
 
+/**
+ * A binary mask back to the wire format, column-major, opening with a run of zeros.
+ *
+ * The inverse of `decodeMask`, and the half the brush needs: a drawn region has to reach
+ * the gateway as RLE like any other. Mirrors `editgpt_core.rle.encode` exactly — the
+ * opening zero run is what makes odd runs the set ones, and a mask whose very first pixel
+ * is set therefore begins with a zero-length run rather than skipping it.
+ *
+ * `rle.test.ts` asserts this against the same Python-generated fixtures the decoder is
+ * checked with, so the two languages cannot drift apart in either direction.
+ */
+export function encodeMask(pixels: Uint8Array, width: number, height: number): MaskPayload {
+  const counts: number[] = [];
+  let value = 0; // the encoding always opens with a run of zeros, even an empty one
+  let run = 0;
+
+  for (let x = 0; x < width; x += 1) {
+    for (let y = 0; y < height; y += 1) {
+      const bit = pixels[y * width + x] === 0 ? 0 : 1;
+      if (bit === value) {
+        run += 1;
+      } else {
+        counts.push(run);
+        value = bit;
+        run = 1;
+      }
+    }
+  }
+  counts.push(run);
+  return { width, height, counts };
+}
+
 export interface Box {
   readonly x0: number;
   readonly y0: number;

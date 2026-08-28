@@ -130,8 +130,11 @@ stronger prompt, so the silhouette it fills is more complete — including the o
 The previous heatmap seed produced a patchier mask that happened to spare them. Better
 grounding made a latent defect legible, which is what better grounding is for.
 **Trigger:** already fired.
-**Workaround:** none. Every quality number in the eval table looks fine for these cases;
-only the images show it.
+**Workaround, since 2026-08-29:** the brush. It does not repair the mask — it stops the
+mask being the only way through. A user who can see the shoe being swallowed can paint
+the region instead, and `mask_source=brush` tells the worker not to second-guess it.
+Every quality number in the eval table still looks fine for these cases; only the images
+show it.
 
 **Attempted 2026-08-28 and not adopted — `segment.occluder_shield`, off behind
 `Thresholds.shield`.** The experiment above was run. It works as designed and still makes
@@ -334,8 +337,11 @@ the same 250 samples:
 reach 0.65-0.75 on this benchmark, and **the failure rate below IoU 0.1 did not move at
 all** (0.360 both ways) — the gain is entirely in cases that were already partly right.
 **Measured:** `benchmarks/out/grounding-detector.json` and `-clipseg.json`.
-**Workaround:** the brush is always available, and the product's own prompts are simpler
-than RefCOCOg's relational expressions.
+**Workaround:** the brush, and the product's own prompts are simpler than RefCOCOg's
+relational expressions. That first clause was written before the brush existed and was
+untrue for three days: `MaskSource.BRUSH` was wired through the contract, the gateway and
+the worker, and no client could produce one. It became true on 2026-08-29. A workaround
+that has never been exercised is a plan, and worth labelling as one.
 **Why deferred:** what remains is not a threshold problem. Both gates were swept on a fit
 split and reported on a holdout (ADR-0002): `min_sam_iou` moves the holdout score by
 0.0006 across its whole useful range, so the fitted value was **not written**.

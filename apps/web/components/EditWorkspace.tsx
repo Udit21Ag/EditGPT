@@ -33,16 +33,31 @@ import {
 } from "@/lib/api";
 import {
   OPERATIONS,
+  PHRASE,
   buildJob,
   groundable,
   ready,
   specFor,
   type Operation,
+  type Region,
 } from "@/lib/edit-request";
+import { EMPTY_HISTORY, hasMask, type MaskHistory } from "@/lib/mask-history";
+import { maskFromStrokes, maskSize } from "@/lib/strokes";
+import { BrushCanvas } from "./BrushCanvas";
 import { CandidatePicker, REJECTED } from "./CandidatePicker";
 import { MaskPreview } from "./MaskPreview";
 
 type Phase = "idle" | "uploading" | "grounding" | "running" | "done";
+
+/**
+ * Describing the region or drawing it.
+ *
+ * Two modes rather than one clever one. A phrase is faster when it works, and ADR-0003
+ * measured that it works about five times in six once the user can choose among
+ * candidates; the brush is what the remaining sixth needs, along with anything the
+ * detector cannot ground at all.
+ */
+type Mode = "describe" | "draw";
 
 interface Progress {
   readonly state: string;
@@ -64,6 +79,8 @@ export function EditWorkspace() {
   const [content, setContent] = useState("");
   const [colour, setColour] = useState("#2ea043");
 
+  const [mode, setMode] = useState<Mode>("describe");
+  const [strokes, setStrokes] = useState<MaskHistory>(EMPTY_HISTORY);
   const [candidates, setCandidates] = useState<Candidate[] | null>(null);
   const [ambiguous, setAmbiguous] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -92,6 +109,27 @@ export function EditWorkspace() {
     setExpanded(false);
     setSelected(0);
   }, []);
+
+  /**
+   * What the job will act on.
+   *
+   * Rasterised here rather than kept as pixels, so the history stays strokes right up to
+   * the moment of submission — a 50-step history is kilobytes this way and gigabytes the
+   * other. Returns `PHRASE` when there is nothing to send, which leaves the worker to
+   * ground the words as it always did.
+   */
+  const regionFor = useCallback((): Region => {
+    if (mode === "draw") {
+      if (image === null || !hasMask(strokes)) return PHRASE;
+      const drawn = maskFromStrokes(strokes.strokes, maskSize(image.width, image.height));
+      return drawn === null ? PHRASE : { kind: "drawn", mask: drawn };
+    }
+    if (candidates !== null && selected >= 0) {
+      const chosen = candidates[selected]?.mask;
+      if (chosen !== undefined) return { kind: "chosen", mask: chosen };
+    }
+    return PHRASE;
+  }, [mode, image, strokes, candidates, selected]);
 
   async function onFile(file: File) {
     forgetRegion();
@@ -139,12 +177,10 @@ export function EditWorkspace() {
     setProgress(null);
     setPhase("running");
 
-    const chosen =
-      candidates !== null && selected >= 0 ? (candidates[selected]?.mask ?? null) : null;
     const draft = { op, imageSha256: image.sha256, target, content, colour };
 
     try {
-      const job = await createJob(getToken, buildJob(draft, chosen));
+      const job = await createJob(getToken, buildJob(draft, regionFor()));
       stopStream.current = streamJob(getToken, job.id, (event) => {
         setProgress({ state: event.state, progress: event.progress, detail: event.detail });
         if (event.terminal) void finish(job.id);
@@ -176,16 +212,18 @@ export function EditWorkspace() {
   );
 
   const busy = phase === "uploading" || phase === "grounding" || phase === "running";
-  const canGround = image !== null && groundable(op, target) && !busy;
-  const needsChoice = ambiguous && candidates !== null && selected === REJECTED;
+  const drawing = mode === "draw" && spec.acceptsTarget;
+  const canGround = image !== null && !drawing && groundable(op, target) && !busy;
+  const needsChoice = !drawing && ambiguous && candidates !== null && selected === REJECTED;
+  const region = image === null ? PHRASE : regionFor();
   const canRun =
     image !== null &&
-    ready({ op, imageSha256: image.sha256, target, content, colour }) &&
+    ready({ op, imageSha256: image.sha256, target, content, colour }, region) &&
     !busy &&
-    !needsChoice;
+    !needsChoice &&
+    (!drawing || region.kind === "drawn");
 
-  const chosenMask =
-    candidates !== null && selected >= 0 ? (candidates[selected]?.mask ?? null) : null;
+  const chosenMask = region.kind === "phrase" ? null : region.mask;
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-8">
@@ -210,11 +248,20 @@ export function EditWorkspace() {
       </section>
 
       {imageUrl !== null && phase !== "done" ? (
-        <MaskPreview
-          imageUrl={imageUrl}
-          mask={chosenMask}
-          alt={chosenMask === null ? "The picture you uploaded" : "The region that will change"}
-        />
+        drawing && image !== null ? (
+          <BrushCanvas
+            imageUrl={imageUrl}
+            aspect={image.width / image.height}
+            history={strokes}
+            onChange={setStrokes}
+          />
+        ) : (
+          <MaskPreview
+            imageUrl={imageUrl}
+            mask={chosenMask}
+            alt={chosenMask === null ? "The picture you uploaded" : "The region that will change"}
+          />
+        )
       ) : null}
 
       {image !== null ? (
@@ -227,9 +274,11 @@ export function EditWorkspace() {
                 aria-pressed={choice.op === op}
                 onClick={() => {
                   setOp(choice.op);
-                  // The region was grounded for the previous operation's phrase; keeping
-                  // it would silently apply an approval the user never gave to this one.
+                  // The region belonged to the previous operation, whether it was grounded
+                  // for a phrase or painted by hand; keeping it would silently apply an
+                  // approval the user never gave to this one.
                   forgetRegion();
+                  setStrokes(EMPTY_HISTORY);
                 }}
                 className={`rounded-md border px-3 py-2 text-sm ${
                   choice.op === op
@@ -243,6 +292,35 @@ export function EditWorkspace() {
           </div>
 
           {spec.acceptsTarget ? (
+            <div className="flex flex-wrap items-center gap-2" role="group" aria-label="How to choose the region">
+              <button
+                type="button"
+                aria-pressed={mode === "describe"}
+                onClick={() => setMode("describe")}
+                className={`rounded-md border px-3 py-2 text-sm ${
+                  mode === "describe"
+                    ? "border-blue-500 bg-blue-50 dark:bg-blue-950/40"
+                    : "border-neutral-300 dark:border-neutral-700"
+                }`}
+              >
+                Describe it
+              </button>
+              <button
+                type="button"
+                aria-pressed={mode === "draw"}
+                onClick={() => setMode("draw")}
+                className={`rounded-md border px-3 py-2 text-sm ${
+                  mode === "draw"
+                    ? "border-blue-500 bg-blue-50 dark:bg-blue-950/40"
+                    : "border-neutral-300 dark:border-neutral-700"
+                }`}
+              >
+                Draw it
+              </button>
+            </div>
+          ) : null}
+
+          {spec.acceptsTarget && !drawing ? (
             <input
               value={target}
               onChange={(event) => {
@@ -283,7 +361,7 @@ export function EditWorkspace() {
           ) : null}
 
           <div className="flex flex-wrap items-center gap-2">
-            {spec.acceptsTarget ? (
+            {spec.acceptsTarget && !drawing ? (
               <button
                 type="button"
                 onClick={() => void onGround()}
@@ -317,7 +395,13 @@ export function EditWorkspace() {
             imageUrl={imageUrl}
             aspect={image.width / image.height}
             selected={selected}
-            onSelect={setSelected}
+            onSelect={(index) => {
+              setSelected(index);
+              // The measured reason the brush exists: the right region is absent from the
+              // top five about one time in six, and a phrase the detector cannot ground
+              // will not ground on a second attempt either.
+              if (index === REJECTED) setMode("draw");
+            }}
             phrase={target.trim()}
           />
         ) : (
