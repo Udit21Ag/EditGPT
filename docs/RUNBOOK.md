@@ -186,6 +186,13 @@ make eval-baseline           # accept the last run as the new baseline
 make memory                  # RSS tier, needs weights
 ```
 
+## Deploying the gateway behind a browser
+
+`EDITGPT_CORS_ORIGINS` must name the origin the app is served from. It defaults to the two
+local development ports, which allows nothing useful anywhere else — and without it the
+browser's preflight is answered 405 and every call is blocked before it is sent. That was
+the shipped state until the browser suite ran.
+
 ## Browser tests
 
 ```bash

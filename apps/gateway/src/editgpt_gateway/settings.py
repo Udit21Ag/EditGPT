@@ -75,6 +75,24 @@ class Settings(BaseSettings):
     the same Clerk instance from working here.
     """
 
+    cors_origins: tuple[str, ...] = ("http://localhost:3000", "http://localhost:3210")
+    """Browser origins allowed to call this API, as a JSON list.
+
+    Required for the frontend to work at all, and it did not exist: a preflight `OPTIONS`
+    answered 405, so every cross-origin request a browser made was blocked before it was
+    sent. Nothing caught it because nothing had ever called this from a browser — curl
+    does not preflight, and the component tests replace `fetch`. The full-stack browser
+    suite found it on its first real run.
+
+    An explicit list rather than `*`. The wildcard would let any page a user visits call
+    this API with their session, and CORS is the only thing standing between those two
+    facts. The defaults are the two local development ports — `next dev` and the one
+    Playwright starts — because a gateway that needs configuring before it works with the
+    app in the same repository is a gateway that appears broken. **A deployment must set
+    this to its real origin**, and leaving the defaults in place there allows nothing
+    useful rather than allowing everything.
+    """
+
     rate_limit_per_minute: int = 30
     """Requests one client may make per minute to the mutating endpoints.
 

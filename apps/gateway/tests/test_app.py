@@ -130,3 +130,70 @@ def test_a_tap_outside_the_picture_is_refused_at_the_boundary(client: TestClient
         json={"image_sha256": "a" * 64, "points": [{"x": 1.4, "y": 0.5}]},
     )
     assert response.status_code == 422
+
+
+# ---------------------------------------------------------------- browser access
+
+
+def browser_client(services: Services, origins: tuple[str, ...]) -> TestClient:
+    """The same app the other tests use, differing only in which origins it admits."""
+    return TestClient(create_app(Settings(environment="test", cors_origins=origins), services))
+
+
+def test_a_browser_preflight_is_answered(services: Services) -> None:
+    """The bug the full-stack browser suite found on its first real run.
+
+    There was no CORS middleware at all, so the preflight reached the router, which knows
+    nothing about `OPTIONS`, and answered 405 — every cross-origin request a browser made
+    was blocked before it was sent. Nothing caught it because nothing had called this from
+    a browser: curl does not preflight and the component tests replace `fetch`.
+    """
+    client = browser_client(services, ("http://localhost:3000",))
+    response = client.options(
+        "/v1/images",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert "authorization" in response.headers["access-control-allow-headers"].lower()
+
+
+def test_an_origin_that_was_not_allowed_gets_nothing(services: Services) -> None:
+    """An explicit list, not a wildcard: otherwise any page a user visits could call this
+    API with their session, and CORS is the only thing between those two facts."""
+    client = browser_client(services, ("http://localhost:3000",))
+    response = client.options(
+        "/v1/images",
+        headers={
+            "Origin": "https://attacker.example",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert response.headers.get("access-control-allow-origin") is None
+
+
+def test_ambient_credentials_are_never_allowed(services: Services) -> None:
+    """The session travels as an `Authorization` header, never a cookie, so nothing needs
+    the browser to attach credentials of its own — and leaving it off shuts the door on a
+    class of cross-site request a cookie session would open."""
+    client = browser_client(services, ("http://localhost:3000",))
+    response = client.options(
+        "/v1/images",
+        headers={"Origin": "http://localhost:3000", "Access-Control-Request-Method": "POST"},
+    )
+    assert response.headers.get("access-control-allow-credentials") is None
+
+
+def test_no_origins_configured_means_no_cross_origin_access(services: Services) -> None:
+    """A deployment serving the app and the API on one origin needs none of this, and
+    should not be handed a header that says otherwise."""
+    client = browser_client(services, ())
+    response = client.options(
+        "/v1/images",
+        headers={"Origin": "http://localhost:3000", "Access-Control-Request-Method": "POST"},
+    )
+    assert response.headers.get("access-control-allow-origin") is None

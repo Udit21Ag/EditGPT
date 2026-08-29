@@ -30,6 +30,7 @@ from editgpt_core import (
 )
 from editgpt_store import AssetNotFoundError, ProgressEvent, last_event, record_image, subscribe
 from fastapi import FastAPI, Header, HTTPException, Request, Response, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from sqlalchemy.orm import Session, sessionmaker
@@ -228,6 +229,22 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     config = settings or get_settings()
     app = FastAPI(title="EditGPT gateway", version=API_VERSION)
     app.state.services = services or build_services(config)
+
+    # Without this a browser never reaches any route below: the preflight is answered by
+    # the router, which knows nothing about `OPTIONS`, and returns 405.
+    #
+    # `allow_credentials` is off deliberately. The session travels as an `Authorization`
+    # header, never a cookie, so nothing here needs the browser to attach ambient
+    # credentials — and leaving it off keeps the door shut on a whole class of
+    # cross-site request that a cookie session would open.
+    if config.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(config.cors_origins),
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["authorization", "content-type", "idempotency-key"],
+        )
 
     # ------------------------------------------------------------------ health
 

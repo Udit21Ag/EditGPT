@@ -460,9 +460,15 @@ and 0.8% outside it.
 points; ~0.5 s against ~6.9 s for a phrase, and it seeds the brush rather than replacing
 it), drop/paste/camera upload, the **before/after wipe**, **version history with
 branch-from-version**, the per-step timeline the worker was already publishing, and
-example prompts. Playwright is in place: the smoke flows run with no credentials and pass
-against the real stack; the two signed-in headline flows are written and **skip** until a
-Clerk test user exists.
+example prompts. **Playwright, both headline flows passing** against a real browser, a real Clerk session,
+the gateway, the worker and the models — 20.6 s for describe-confirm-edit and 17.2 s for
+tap-and-erase. That is Phase 8's E2E exit criterion met.
+
+It earned its cost on the first run that got far enough to try: **the gateway had no CORS
+middleware at all**, so a browser's preflight was answered 405 by the router and every
+cross-origin call was blocked before it was sent. The frontend could never have worked.
+Nothing else could have caught it — curl does not preflight, and the component tests
+replace `fetch`.
 
 **Not yet:** pan/zoom, lasso, mask-overlay opacity, quota display, a full a11y audit
 (labels, roles and live regions are in place; contrast and focus order are not audited),

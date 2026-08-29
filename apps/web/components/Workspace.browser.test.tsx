@@ -256,3 +256,23 @@ describe("tapping instead of describing", () => {
     expect(job.target).toBeUndefined();
   });
 });
+
+describe("when the gateway cannot be reached", () => {
+  it("says so, instead of 'something went wrong'", async () => {
+    // The message that hid a gateway with no CORS middleware. `fetch` rejects with a bare
+    // TypeError when the request never left the browser: no status, no body, and the
+    // reason only in a console nobody was reading.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      if (String(input).startsWith("data:")) return new Response(new Blob());
+      throw new TypeError("Failed to fetch");
+    });
+
+    render(<Workspace getToken={token} />);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(["x"], "p.png", { type: "image/png" })] } });
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/could not reach the gateway/i);
+    expect(alert.textContent).toContain("gateway.test");
+  });
+});

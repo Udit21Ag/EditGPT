@@ -22,6 +22,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { GetToken } from "@/lib/api";
 import {
   ApiError,
+  GATEWAY_URL,
   createJob,
   getJob,
   groundPhrase,
@@ -122,7 +123,22 @@ export function Workspace({ getToken }: { getToken: GetToken }) {
   }, []);
 
   const reportError = (cause: unknown) => {
-    setError(cause instanceof ApiError ? cause.message : "Something went wrong. Try again.");
+    if (cause instanceof ApiError) {
+      setError(cause.message);
+      return;
+    }
+    // `fetch` rejects with a bare TypeError when the request never reached the server —
+    // no status, no body, and the reason only in the console. That message hid a gateway
+    // with no CORS middleware for as long as the frontend existed: every call was blocked
+    // before it was sent, and the page said "something went wrong".
+    if (cause instanceof TypeError) {
+      setError(
+        `Could not reach the gateway at ${GATEWAY_URL}. It may be down, or not allowing ` +
+          "requests from this page. The browser console has the reason.",
+      );
+      return;
+    }
+    setError("Something went wrong. Try again.");
   };
 
   /** Anything that invalidates a region the user already approved. */
