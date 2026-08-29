@@ -11,18 +11,30 @@
  * | Variable | Why |
  * | --- | --- |
  * | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` | already in `.env`; `clerkSetup` exchanges them for a Testing Token, which is what lets a script past bot protection |
- * | `CLERK_E2E_EMAIL`, `CLERK_E2E_PASSWORD` | a user to *be*. Clerk has no way to conjure a session without one, and creating one changes somebody's account, so it is asked for rather than assumed |
+ * | `CLERK_E2E_EMAIL` | a user to *be*. Clerk cannot conjure a session without one, and creating one changes somebody's account, so it is asked for rather than assumed |
+ * | `CLERK_E2E_PASSWORD` | only when the address is an ordinary one |
  *
- * The gateway and worker are assumed up: `make e2e` starts them.
+ * **Prefer a `+clerk_test` address.** Clerk treats those as test accounts and accepts a
+ * fixed verification code, which its helper supplies, so no password is involved and none
+ * is stored. It also
+ * sidesteps a real refusal seen here: Clerk rejects sign-in with a password that appears
+ * in a breach corpus, which is a sensible policy and an awkward one to satisfy with a
+ * password that has to live in a file.
+ *
+ * The gateway and worker are assumed up: see `docs/RUNBOOK.md`.
  */
 
-import { clerk, clerkSetup } from "@clerk/testing/playwright";
+import { clerk, clerkSetup, setupClerkTestingToken } from "@clerk/testing/playwright";
 import { expect, test } from "@playwright/test";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const EMAIL = process.env.CLERK_E2E_EMAIL;
 const PASSWORD = process.env.CLERK_E2E_PASSWORD;
+
+/** Clerk's helper supplies the fixed verification code for a `+clerk_test` address
+ * itself — its `email_code` params take only the identifier. */
+const TEST_ACCOUNT = EMAIL !== undefined && EMAIL.includes("+clerk_test");
 const PHOTO = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -34,8 +46,8 @@ const PHOTO = path.join(
 );
 
 test.skip(
-  EMAIL === undefined || PASSWORD === undefined,
-  "set CLERK_E2E_EMAIL and CLERK_E2E_PASSWORD to run the signed-in flows",
+  EMAIL === undefined || (!TEST_ACCOUNT && PASSWORD === undefined),
+  "set CLERK_E2E_EMAIL (a +clerk_test address, or an ordinary one with CLERK_E2E_PASSWORD)",
 );
 
 test.beforeAll(async () => {
@@ -43,11 +55,35 @@ test.beforeAll(async () => {
 });
 
 test.beforeEach(async ({ page }) => {
+  // Two halves, and both are needed. `clerkSetup` exchanges the instance keys for a
+  // Testing Token once; this attaches it to *this page's* requests. Without it the
+  // sign-in is accepted and then parks at `needs_client_trust` — Clerk's device-trust
+  // check, which a script has no way to satisfy — leaving `Clerk.session` null and the
+  // server rendering a signed-out page with no error anywhere to explain it.
+  await setupClerkTestingToken({ page });
   await page.goto("/");
   await clerk.signIn({
     page,
-    signInParams: { strategy: "password", identifier: EMAIL!, password: PASSWORD! },
+    signInParams: TEST_ACCOUNT
+      ? { strategy: "email_code", identifier: EMAIL! }
+      : { strategy: "password", identifier: EMAIL!, password: PASSWORD! },
   });
+  // Fail here, naming the cause, rather than twenty lines later on a missing button.
+  // A sign-in that parks at `needs_client_trust` leaves `Clerk.session` null and no error
+  // anywhere, and the only symptom is a page that renders as though nobody signed in.
+  const signedIn = await page.evaluate(() => {
+    const clerkJs = (window as unknown as { Clerk?: { session?: unknown } }).Clerk;
+    return clerkJs?.session !== null && clerkJs?.session !== undefined;
+  });
+  if (!signedIn) {
+    throw new Error(
+      `Clerk accepted the credentials but created no session for ${EMAIL}. On this ` +
+        "instance an ordinary address needs a device-trust code posted to its mailbox, " +
+        "which no script can read. Use an address containing '+clerk_test' — Clerk " +
+        "accepts a fixed code for those — and leave CLERK_E2E_PASSWORD empty.",
+    );
+  }
+
   await page.goto("/");
   await expect(page.getByText(/choose a picture/i)).toBeVisible();
 });

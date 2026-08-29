@@ -3,8 +3,17 @@ import { fileURLToPath } from "node:url";
 
 import { defineConfig, devices } from "@playwright/test";
 
+import { loadRepoEnv } from "./repo-env";
+
+// The runner decides whether the signed-in specs skip, and it is a different process from
+// the server it starts — so it needs the repository's `.env` as much as Next does.
+loadRepoEnv();
+
 const here = path.dirname(fileURLToPath(import.meta.url));
-const BASE_URL = process.env.EDITGPT_E2E_URL ?? "http://127.0.0.1:3210";
+// `localhost`, not `127.0.0.1`. They are different origins for cookies, and Clerk's
+// session cookie is set on the one the browser visited — sign in against one and reload
+// the other and the server sees a signed-out visitor, which is exactly what happened.
+const BASE_URL = process.env.EDITGPT_E2E_URL ?? "http://localhost:3210";
 
 /**
  * Full-stack browser tests: a real Next server, a real gateway, a real worker.
