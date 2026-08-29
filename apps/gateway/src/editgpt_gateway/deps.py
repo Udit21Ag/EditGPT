@@ -117,6 +117,11 @@ class Services:
             problems.append("no queue: jobs are accepted but never executed")
         if not self.settings.uses_clerk:
             problems.append("no authentication: every request acts as the shared account")
+        if self.settings.cors_allows_localhost and self.settings.is_deployed:
+            # It fails safe — the deployment's real origin is blocked, so somebody notices
+            # within a minute — but silently keeping a development default is how a setting
+            # nobody set becomes a setting nobody knows about.
+            problems.append("cors still allows localhost: set EDITGPT_CORS_ORIGINS")
         return problems
 
 

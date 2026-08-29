@@ -476,7 +476,19 @@ the bottom-sheet mobile layout, and Lighthouse ≥90.
 
 **Exit:** Lighthouse ≥90 across the board on mobile; both flows pass E2E.
 
-### Phase 9 — Hardening & observability (4–5 days)
+### Phase 9 — Hardening & observability (4–5 days) · **in progress**
+
+**Delivered 29 Aug 2026.** **EXIF/PII stripping** at the upload boundary, losslessly —
+verified on a real 15.9 MP phone photograph: 19 tags gone, pixels bit-identical, 640 KB
+smaller. **CORS**, which did not exist at all and which the browser suite found: an
+explicit origin allowlist, credentials off, and `/ready` now reports a deployment that
+kept the development defaults.
+
+**Not yet:** signed URL expiry and object lifecycle, structured JSON logs, OTel spans,
+Sentry, the locust load test, and graceful degradation when every provider is
+quota-exhausted. Prompt-injection defence and the NSFW gate wait on there being
+image-derived text and a critic to put them in, neither of which exists yet.
+
 
 Prompt-injection defence on image-derived text · NSFW/safety gate in the critic · PII/EXIF stripping ·
 signed URL expiry + object lifecycle (auto-delete after N days) · OTel spans across agent hops with a shared trace id ·

@@ -9,6 +9,7 @@ suite that stops being run.
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -197,3 +198,76 @@ def test_no_origins_configured_means_no_cross_origin_access(services: Services) 
         headers={"Origin": "http://localhost:3000", "Access-Control-Request-Method": "POST"},
     )
     assert response.headers.get("access-control-allow-origin") is None
+
+
+def readiness_with(services: Services, **over: object) -> list[str]:
+    """`/ready`'s degradations under different settings.
+
+    `Services` carries the settings that `degraded` reads, so both have to be replaced —
+    passing new settings to `create_app` alone changes what the routes see and not what
+    the readiness check reports, which is a trap worth only falling into once.
+    """
+    settings = Settings(**({"environment": "test"} | over))  # type: ignore[arg-type]
+    swapped = replace(services, settings=settings)
+    client = TestClient(create_app(settings, swapped))
+    problems: list[str] = client.get("/ready").json()["degraded"]
+    return problems
+
+
+def test_a_deployment_that_kept_the_development_origins_says_so(services: Services) -> None:
+    """It fails safe — the real origin is blocked, so somebody notices within a minute —
+    but a development default nobody set becomes a setting nobody knows about."""
+    problems = readiness_with(
+        services, environment="production", cors_origins=("http://localhost:3000",)
+    )
+    assert any("cors still allows localhost" in problem for problem in problems)
+
+
+@pytest.mark.parametrize("environment", ["development", "test", "ci"])
+def test_a_local_environment_is_not_nagged_about_its_own_defaults(
+    services: Services, environment: str
+) -> None:
+    problems = readiness_with(
+        services, environment=environment, cors_origins=("http://localhost:3000",)
+    )
+    assert not any("cors" in problem for problem in problems)
+
+
+def test_a_real_origin_is_not_flagged(services: Services) -> None:
+    problems = readiness_with(
+        services, environment="production", cors_origins=("https://editgpt.example",)
+    )
+    assert not any("cors" in problem for problem in problems)
+
+
+def test_an_upload_is_stored_without_the_camera_that_took_it(
+    client: TestClient, services: Services
+) -> None:
+    """The boundary must actually call the scrubber.
+
+    `test_scrub.py` proves the function works; this proves it is wired in. Removing the
+    call from `inspect` passed every test in that file, which is the whole reason this one
+    exists — a privacy fix nobody invokes is not a fix.
+    """
+    import io
+
+    from PIL import Image
+
+    tags = Image.Exif()
+    tags[0x010F] = "iQOO"
+    tags[0x0110] = "iQOO Neo7"
+    buffer = io.BytesIO()
+    Image.new("RGB", (64, 48), (20, 90, 140)).save(
+        buffer, format="JPEG", quality=90, exif=tags.tobytes()
+    )
+    uploaded = buffer.getvalue()
+
+    with Image.open(io.BytesIO(uploaded)) as image:
+        assert dict(image.getexif()), "the fixture carries no metadata; it proves nothing"
+
+    response = client.post("/v1/images", files={"file": ("phone.jpg", uploaded, "image/jpeg")})
+    assert response.status_code == 201, response.text
+
+    stored = services.assets.get(response.json()["sha256"])
+    with Image.open(io.BytesIO(stored)) as image:
+        assert dict(image.getexif()) == {}, "the camera came with it"

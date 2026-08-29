@@ -12,6 +12,9 @@ from pathlib import Path
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+LOCAL_ENVIRONMENTS = frozenset({"development", "test", "ci"})
+"""Environments where a development default is the right answer, not a warning."""
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="EDITGPT_", env_file=".env", extra="ignore")
@@ -92,6 +95,29 @@ class Settings(BaseSettings):
     this to its real origin**, and leaving the defaults in place there allows nothing
     useful rather than allowing everything.
     """
+
+    @property
+    def is_deployed(self) -> bool:
+        """Whether this is running somewhere other than a developer's machine or CI.
+
+        Named environments rather than "not development", because `test` and `ci` are both
+        local in every sense that matters here and neither should be nagged about a setting
+        that is correct for them.
+        """
+        return self.environment not in LOCAL_ENVIRONMENTS
+
+    @property
+    def cors_allows_localhost(self) -> bool:
+        """Whether any allowed browser origin is a development one.
+
+        Reported by `/ready` outside development. The defaults exist so the app in this
+        repository works without configuration, and the cost of that convenience is a
+        deployment that keeps them without meaning to.
+        """
+        return any(
+            origin.startswith(("http://localhost", "http://127.0.0.1"))
+            for origin in self.cors_origins
+        )
 
     rate_limit_per_minute: int = 30
     """Requests one client may make per minute to the mutating endpoints.

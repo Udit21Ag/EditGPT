@@ -17,6 +17,9 @@ What is checked, and why each one is not optional:
   without decoding, so the dimensions are known while the file is still 200 KB.
 * **An allowlist of formats**, not a denylist. SVG and anything with a scripting or
   external-reference capability is simply not on it.
+* **Metadata is removed** before anything is stored. See `scrub.py`: an upload used to be
+  kept byte for byte, so the camera, the software and the moment it was taken travelled
+  with it, and a photograph taken outdoors brought its coordinates.
 """
 
 from __future__ import annotations
@@ -27,6 +30,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from editgpt_core import AssetRef
+
+from editgpt_gateway.scrub import scrub
 
 log = logging.getLogger(__name__)
 
@@ -144,7 +149,10 @@ def inspect(data: bytes, *, max_megapixels: float) -> Upload:
         )
 
     return Upload(
-        data=data,
+        # Scrubbed here rather than downstream: this is the boundary, and the digest is
+        # taken from what this returns, so what is stored and what is served are the same
+        # bytes and neither carries the camera that took the picture.
+        data=scrub(data, image_format),
         width=width,
         height=height,
         content_type=ALLOWED_FORMATS[image_format],

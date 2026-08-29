@@ -139,6 +139,24 @@ it for grounding, which regressed once exactly that way.
 runs are the set ones. Interchangeable with the wider tooling ecosystem, and transposed if
 you read it row-major.
 
+## What the boundary removes
+
+An upload is scrubbed of metadata before it is stored, in `apps/gateway/src/editgpt_gateway/scrub.py`, and the
+digest is taken from the scrubbed bytes so what is stored and what is served are the same
+thing. It used to be kept byte for byte: a phone photograph in this repository's own
+fixtures carried make `iQOO`, model `iQOO Neo7` and the second it was taken, and one taken
+outdoors would have carried the coordinates.
+
+**Nothing is re-encoded that does not have to be.** An image with no metadata is returned
+untouched; JPEG, PNG and WebP are edited at the segment or chunk level with the compressed
+data never decoded. Measured on a 15.9 MP photograph: 19 EXIF tags removed, pixels
+bit-identical, 640 KB smaller because the embedded thumbnail went with them. Only a
+container this cannot edit in place *and* that carries metadata is re-encoded, and it says
+so in the log.
+
+**ICC profiles and JFIF density are kept.** They describe how to interpret the pixels, not
+who took them; dropping them changes what the picture looks like.
+
 ## Data stores
 
 | Store             | Responsibility                                             | Status                                                          |
