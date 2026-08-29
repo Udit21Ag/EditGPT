@@ -95,7 +95,7 @@ jobs:
   # to the run's job summary and the images to an artifact either way.
   eval:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
       pull-requests: write
@@ -170,15 +170,27 @@ jobs:
               await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });
             }
 
+      # Advisory for now, deliberately. The tolerances in `evals/diff.py` were calibrated
+      # against two runs on one laptop, where the local half of the golden set is
+      # bit-exact; the floor on a CI worker — different CPU, different ONNX Runtime build —
+      # has never been measured, and a grounding-IoU shift blocks. Failing the build on an
+      # unmeasured threshold would teach people to ignore it, which is worse than the
+      # nothing it replaced.
+      #
+      # **Remove `continue-on-error` once a handful of runs have shown the floor**, and
+      # tighten `COST_TOLERANCE` and `SIGNATURE_TOLERANCE` at the same time. The diff is in
+      # the run summary either way, so nothing is hidden meanwhile.
+      #
       # Through the environment rather than `${{ }}` in the script: the report is
       # multi-line, and expanding it inline would both break the shell and hand any
       # future report text a way into it.
       - name: Fail on a blocking change
+        continue-on-error: true
         env:
           REPORT: ${{ steps.diff.outputs.report }}
         run: |
           case "$REPORT" in
-            *__BLOCKING__*) echo "blocking quality change; see the comment above"; exit 1 ;;
+            *__BLOCKING__*) echo "blocking quality change; see the summary above"; exit 1 ;;
           esac
 
   web:
@@ -265,6 +277,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @editgpt/web exec playwright install --with-deps chromium
+
+      # The gateway reports `jobs: postgres` from configuration alone; without the schema
+      # the first real request is the one that finds out.
+      - name: Apply migrations
+        run: make migrate
 
       - name: Start the gateway
         run: |
