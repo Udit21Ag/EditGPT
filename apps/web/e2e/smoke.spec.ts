@@ -48,7 +48,13 @@ const EXPLICABLE = [
   "no redis: progress streaming and rate limiting are off",
   "no queue: jobs are accepted but never executed",
   "jobs are in memory and will not survive a restart",
+  "image links are signed with a per-process key: set EDITGPT_URL_SIGNING_KEY",
+  "cors still allows localhost: set EDITGPT_CORS_ORIGINS",
 ];
+
+// Adding a line here is meant to be a deliberate act. The list caught its own first new
+// entry — signed links arrived, `/ready` grew a degradation, and this failed until
+// somebody acknowledged it, which is exactly the point.
 
 test("the gateway is reachable and reports nothing unexpected", async ({ request }) => {
   const health = await request.get(`${GATEWAY}/ready`);

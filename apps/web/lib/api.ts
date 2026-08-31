@@ -65,6 +65,9 @@ export interface UploadedImage {
   height: number;
   content_type: string;
   megapixels: number;
+  /** A short-lived link a browser can put straight in an `<img src>`. */
+  url: string;
+  url_expires_at: number;
 }
 
 export interface JobStep {
@@ -80,6 +83,8 @@ export interface Job {
   progress: number;
   op: string;
   result_sha256: string | null;
+  /** A short-lived link to the result. Empty until there is one. */
+  result_url: string;
   error: string | null;
   steps: JobStep[];
 }
@@ -213,23 +218,6 @@ export async function cancelJob(getToken: GetToken, id: string): Promise<Job> {
     await authorized(getToken, { method: "POST" }),
   );
   return response.ok ? response.json() : decode(response);
-}
-
-/**
- * A blob URL for a stored image.
- *
- * Fetched rather than pointed at with `<img src>`, because the endpoint needs an
- * `Authorization` header and a plain `<img>` cannot send one. The caller owns the
- * returned URL and must `URL.revokeObjectURL` it, or every viewed image stays in memory
- * for the life of the tab.
- *
- * The longer-term answer is a short-lived signed URL, which `<img>` *can* use — planned
- * for Phase 9 alongside object expiry.
- */
-export async function imageObjectUrl(getToken: GetToken, digest: string): Promise<string> {
-  const response = await fetch(`${GATEWAY_URL}/v1/images/${digest}`, await authorized(getToken));
-  if (!response.ok) await decode(response);
-  return URL.createObjectURL(await response.blob());
 }
 
 /**

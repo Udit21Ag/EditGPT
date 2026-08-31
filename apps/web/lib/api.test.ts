@@ -4,7 +4,6 @@ import {
   createJob,
   groundPhrase,
   groundPoints,
-  imageObjectUrl,
   streamJob,
   uploadImage,
 } from "./api";
@@ -88,13 +87,14 @@ describe("errors", () => {
 });
 
 describe("images", () => {
-  it("fetches with the header and hands back an object url", async () => {
-    // `<img src>` cannot send an Authorization header, which is the whole reason this
-    // goes through fetch and a blob.
-    respondWith("bytes");
-    vi.stubGlobal("URL", { ...URL, createObjectURL: () => "blob:fake" });
+  it("takes the link the gateway issued rather than fetching the bytes", async () => {
+    // `<img src>` cannot send an Authorization header. Every picture used to be fetched
+    // by script and wrapped in an object URL, which cost a copy of each image in the tab
+    // until something revoked it. The gateway now signs a short-lived link instead.
+    respondWith({ sha256: "a".repeat(64), width: 8, height: 6, url: "/v1/images/a?sig=x" });
 
-    await expect(imageObjectUrl(token, "a".repeat(64))).resolves.toBe("blob:fake");
+    const uploaded = await uploadImage(token, new File(["x"], "p.png", { type: "image/png" }));
+    expect(uploaded.url).toBe("/v1/images/a?sig=x");
   });
 });
 

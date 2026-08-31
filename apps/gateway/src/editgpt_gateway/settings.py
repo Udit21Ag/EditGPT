@@ -7,10 +7,14 @@ should read the same variables, not two sets that happen to be filled in consist
 
 from __future__ import annotations
 
+import secrets
 from pathlib import Path
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_EPHEMERAL_KEY: str | None = None
+"""Set once per process when no signing key is configured. See `effective_signing_key`."""
 
 LOCAL_ENVIRONMENTS = frozenset({"development", "test", "ci"})
 """Environments where a development default is the right answer, not a warning."""
@@ -97,6 +101,20 @@ class Settings(BaseSettings):
     """
 
     @property
+    def effective_signing_key(self) -> str:
+        """The signing key, or a per-process one if none was configured.
+
+        Generated rather than defaulted to a constant: a shipped default secret is not a
+        secret, and every deployment that forgot to set it would share it.
+        """
+        if self.url_signing_key:
+            return self.url_signing_key
+        global _EPHEMERAL_KEY
+        if _EPHEMERAL_KEY is None:
+            _EPHEMERAL_KEY = secrets.token_urlsafe(32)
+        return _EPHEMERAL_KEY
+
+    @property
     def is_deployed(self) -> bool:
         """Whether this is running somewhere other than a developer's machine or CI.
 
@@ -118,6 +136,23 @@ class Settings(BaseSettings):
             origin.startswith(("http://localhost", "http://127.0.0.1"))
             for origin in self.cors_origins
         )
+
+    url_signing_key: str = ""
+    """Secret for the short-lived image links. Any long random string.
+
+    Empty means one is generated per process, which works and has two consequences worth
+    knowing: links stop working when the gateway restarts, and a second replica cannot
+    verify the first's. `/ready` says so. Set it in any deployment with more than one
+    process or a restart policy — which is all of them."""
+
+    url_ttl_seconds: int = 3600
+    """How long an image link lives.
+
+    An hour, because an editing session lasts one and a link that expires underneath a
+    page turns the user's own history into broken thumbnails. Short enough that a link
+    pasted somewhere public stops working the same day. The pictures are the user's own
+    and the digest is already unguessable, so the marginal risk of the longer window is
+    small next to the cost of the shorter one."""
 
     rate_limit_per_minute: int = 30
     """Requests one client may make per minute to the mutating endpoints.

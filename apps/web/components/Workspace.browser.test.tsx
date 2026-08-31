@@ -81,7 +81,18 @@ function serve(over: Partial<Server> = {}) {
       });
 
     if (path === "/v1/images" && init?.method === "POST") {
-      return json({ sha256: SHA, width: 80, height: 60, content_type: "image/png", megapixels: 0.005 }, 201);
+      return json(
+        {
+          sha256: SHA,
+          width: 80,
+          height: 60,
+          content_type: "image/png",
+          megapixels: 0.005,
+          url: `/v1/images/${SHA}?expires=1&signature=x`,
+          url_expires_at: 1,
+        },
+        201,
+      );
     }
     if (path === "/v1/masks") {
       const boxes = [rect(10, 10, 30, 30), rect(50, 20, 70, 45)].slice(0, server.candidates);
@@ -97,7 +108,10 @@ function serve(over: Partial<Server> = {}) {
       });
     }
     if (path === "/v1/jobs" && init?.method === "POST") {
-      return json({ id: "job-1", state: "queued", progress: 0, op: "remove", result_sha256: null, error: null, steps: [] }, 202);
+      return json(
+        { id: "job-1", state: "queued", progress: 0, op: "remove", result_sha256: null, result_url: "", error: null, steps: [] },
+        202,
+      );
     }
     if (path === "/v1/jobs/job-1/events") {
       // One frame, terminal, in the SSE shape `streamJob` parses.
@@ -107,7 +121,9 @@ function serve(over: Partial<Server> = {}) {
     if (path === "/v1/jobs/job-1") {
       return json({
         id: "job-1", state: "done", progress: 1, op: "remove",
-        result_sha256: RESULT, error: null,
+        result_sha256: RESULT,
+        result_url: png("#20c060"),
+        error: null,
         steps: [
           { state: "queued", at: "2026-08-29T10:00:00Z", detail: "", progress: 0 },
           { state: "running", at: "2026-08-29T10:00:02Z", detail: "migan", progress: 0.5 },
@@ -151,8 +167,21 @@ describe("the flow", () => {
       "/v1/jobs",
       "/v1/jobs/job-1/events",
       "/v1/jobs/job-1",
-      `/v1/images/${RESULT}`,
     ]);
+  });
+
+  it("never fetches the result image itself", async () => {
+    // The signed link is the point: `<img src>` loads it, so the bytes never pass through
+    // JavaScript and never sit in an object URL waiting to be revoked.
+    const server = serve();
+    await upload();
+    fireEvent.change(screen.getByLabelText("What to change"), { target: { value: "the car" } });
+    fireEvent.click(screen.getByRole("button", { name: "Find it" }));
+    await screen.findByText(/region that will change/i);
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    await screen.findByRole("slider", { name: /wipe/i }, { timeout: 5000 });
+
+    expect(server.sent.filter((s) => s.path.startsWith("/v1/images/"))).toEqual([]);
   });
 
   it("sends the grounded mask with the job rather than the phrase alone", async () => {

@@ -11,13 +11,16 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
-from editgpt_core import EditOp
+from editgpt_core import EditOp, JobState
 from editgpt_gateway.app import create_app
 from editgpt_gateway.deps import Services
 from editgpt_gateway.settings import Settings
 from fastapi.testclient import TestClient
+
+from .conftest import png_bytes
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -289,3 +292,95 @@ def test_two_requests_get_different_ids(client: TestClient) -> None:
     first = client.get("/health").headers["x-request-id"]
     second = client.get("/health").headers["x-request-id"]
     assert first != second
+
+
+# ---------------------------------------------------------------- image links
+
+
+def test_a_signed_link_serves_the_image_without_a_session(
+    client: TestClient, uploaded: str
+) -> None:
+    created = client.post("/v1/images", files={"file": ("p.png", png_bytes(), "image/png")}).json()
+    assert created["url"], "no link was issued"
+
+    # A fresh client with no credentials at all, which is what an `<img>` tag is.
+    anonymous = TestClient(client.app)
+    anonymous.headers.clear()
+    response = anonymous.get(created["url"])
+    assert response.status_code == 200, response.text
+    assert response.content == png_bytes()
+
+
+def test_a_link_for_one_image_does_not_serve_another(client: TestClient) -> None:
+    created = client.post("/v1/images", files={"file": ("p.png", png_bytes(), "image/png")}).json()
+    query = created["url"].split("?", 1)[1]
+
+    other = "b" * 64
+    response = client.get(f"/v1/images/{other}?{query}")
+    assert response.status_code in (401, 404)
+
+
+def test_a_request_without_a_valid_signature_still_goes_through_authentication(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The control flow, asserted directly.
+
+    A status code cannot show this here: the test gateway runs in anonymous mode, so
+    everything answers 200 whether or not the check ran, and asserting 401 would pass only
+    on a configured stack and vacuously everywhere else. What matters is that a missing or
+    forged signature falls *through* to the session check rather than around it.
+    """
+    from editgpt_gateway import auth as auth_module
+
+    created = client.post("/v1/images", files={"file": ("p.png", png_bytes(), "image/png")}).json()
+    digest = created["sha256"]
+    checked: list[str] = []
+    real = auth_module.current_identity
+
+    def watched(request: Any, svc: Any) -> Any:
+        checked.append("asked")
+        return real(request, svc)
+
+    monkeypatch.setattr(auth_module, "current_identity", watched)
+
+    client.get(f"/v1/images/{digest}")
+    assert checked, "no signature, and the session check was skipped"
+
+    checked.clear()
+    client.get(f"/v1/images/{digest}?expires=99999999999&signature=forged")
+    assert checked, "a forged signature bypassed the session check"
+
+    checked.clear()
+    client.get(created["url"])
+    assert not checked, "a valid signature should not need a session"
+
+
+def test_a_finished_job_carries_a_link_to_its_result(
+    client: TestClient, services: Services, uploaded: str
+) -> None:
+    """So the client can show the result without another round trip or an object URL."""
+    from uuid import UUID
+
+    created = client.post(
+        "/v1/jobs",
+        json={
+            "op": "remove",
+            "image_sha256": uploaded,
+            "mask_source": "text",
+            "target": "the car",
+        },
+    ).json()
+    job = services.jobs.get(UUID(created["id"]))
+    assert job is not None
+
+    digest = services.assets.put(png_bytes(), content_type="image/png")
+    # QUEUED -> PLANNING -> RUNNING -> REVIEW -> DONE; the machine has no shortcuts, so a
+    # retry is always recorded rather than implied.
+    reached = job
+    for state in (JobState.PLANNING, JobState.RUNNING, JobState.REVIEW):
+        reached = reached.advance(state, detail=state.value)
+    services.jobs.save(reached.advance(JobState.DONE, result_sha256=digest, detail="done"))
+
+    view = client.get(f"/v1/jobs/{created['id']}").json()
+    assert view["result_sha256"] == digest
+    assert view["result_url"], "a result with no link is a result the client cannot show"

@@ -27,7 +27,6 @@ import {
   getJob,
   groundPhrase,
   groundPoints,
-  imageObjectUrl,
   streamJob,
   uploadImage,
   type Candidate,
@@ -214,7 +213,7 @@ export function Workspace({ getToken }: { getToken: GetToken }) {
     setSteps([]);
     setPhase("idle");
     setCurrent(index);
-    setImage({ ...version, content_type: "image/png", megapixels: 0 });
+    setImage({ ...version, content_type: "image/png", megapixels: 0, url, url_expires_at: 0 });
     setImageUrl(url);
   }
 
@@ -318,7 +317,9 @@ export function Workspace({ getToken }: { getToken: GetToken }) {
           return;
         }
         const digest = done.result_sha256;
-        const url = await imageObjectUrl(getToken, digest);
+        // The gateway signs the link; no fetch, no object URL, and the browser's own
+        // cache does its job.
+        const url = done.result_url;
         urls.current.set(digest, url);
         setResultUrl(url);
         setVersions((history) =>

@@ -117,6 +117,10 @@ class Services:
             problems.append("no queue: jobs are accepted but never executed")
         if not self.settings.uses_clerk:
             problems.append("no authentication: every request acts as the shared account")
+        if not self.settings.url_signing_key:
+            problems.append(
+                "image links are signed with a per-process key: set EDITGPT_URL_SIGNING_KEY"
+            )
         if self.settings.cors_allows_localhost and self.settings.is_deployed:
             # It fails safe — the deployment's real origin is blocked, so somebody notices
             # within a minute — but silently keeping a development default is how a setting

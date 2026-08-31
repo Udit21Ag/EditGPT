@@ -139,6 +139,21 @@ it for grounding, which regressed once exactly that way.
 runs are the set ones. Interchangeable with the wider tooling ecosystem, and transposed if
 you read it row-major.
 
+## Serving an image
+
+`GET /v1/images/{digest}` takes **either** a session or a signature in the query string.
+The signature is what an `<img src>` can carry: HMAC-SHA256 over `digest:expires`, granting
+one digest until one expiry and nothing else. Before it, every picture was fetched by
+script and wrapped in an object URL — a copy of each image in the tab until something
+revoked it, the whole download in front of the first paint, and the browser's own cache
+made useless.
+
+Expiry is checked separately from the comparison, because an expired signature is still
+*arithmetically* valid; the comparison is constant-time, because the obvious one leaks a
+signature a byte at a time. `EDITGPT_URL_SIGNING_KEY` must be set wherever there is more
+than one process or a restart policy — otherwise each process signs with its own key and
+`/ready` says so.
+
 ## What the boundary removes
 
 An upload is scrubbed of metadata before it is stored, in `apps/gateway/src/editgpt_gateway/scrub.py`, and the

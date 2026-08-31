@@ -37,7 +37,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from sqlalchemy.orm import Session, sessionmaker
 
-from editgpt_gateway import auth, limits, uploads
+from editgpt_gateway import auth, limits, signing, uploads
 from editgpt_gateway.auth import PrincipalDep
 from editgpt_gateway.deps import Services, ServicesDep, build_services
 from editgpt_gateway.settings import Settings, get_settings
@@ -93,6 +93,10 @@ class ImageCreated(BaseModel):
     height: int
     content_type: str
     megapixels: float
+    url: str = ""
+    """A short-lived link a browser can put straight in an `<img src>`."""
+
+    url_expires_at: int = 0
 
 
 class MaskPayloadOut(BaseModel):
@@ -202,6 +206,9 @@ class JobView(BaseModel):
     progress: float
     op: EditOp
     result_sha256: str | None
+    result_url: str = ""
+    """A short-lived link to the result, empty until there is one."""
+
     error: str | None
     created_at: str
     updated_at: str
@@ -343,7 +350,10 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
                 "bytes": len(inspected.data),
             },
         )
+        url, url_expires_at = link_for(digest)
         return ImageCreated(
+            url=url,
+            url_expires_at=url_expires_at,
             sha256=digest,
             width=inspected.width,
             height=inspected.height,
@@ -351,8 +361,32 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             megapixels=round(inspected.megapixels, 3),
         )
 
+    def link_for(digest: str) -> tuple[str, int]:
+        return signing.link(
+            digest, key=config.effective_signing_key, ttl_seconds=config.url_ttl_seconds
+        )
+
+    def viewed(job: Job) -> JobView:
+        """A job, with a link to its result if it has one.
+
+        A helper rather than a `JobView.of` parameter because the signing key belongs to
+        the app's configuration and `JobView` is a shape on the wire; giving the contract a
+        way to reach settings would be the wrong direction for that arrow.
+        """
+        view = JobView.of(job)
+        if job.result_sha256 is None:
+            return view
+        url, _ = link_for(job.result_sha256)
+        return view.model_copy(update={"result_url": url})
+
     @app.get("/v1/images/{digest}")
-    def download_image(digest: str, svc: ServicesDep, principal: PrincipalDep) -> Response:
+    def download_image(
+        request: Request,
+        digest: str,
+        svc: ServicesDep,
+        expires: int | None = None,
+        signature: str | None = None,
+    ) -> Response:
         """Serve an asset by digest.
 
         Immutable by construction — the name *is* the content — so it is cacheable
@@ -365,7 +399,18 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
         second uploader would be locked out of their own upload. Recorded as TD-019; the
         fix is a user↔image join table, not a check bolted on here.
         """
-        del principal  # the dependency is the check; the value is not needed
+        # Either a signature for *this* digest or a session. The signature is what makes
+        # a plain `<img src>` work; without it every picture has to be fetched by script
+        # and wrapped in an object URL, which costs a copy of each image in the tab until
+        # something remembers to revoke it and defeats the browser's own cache.
+        signed = (
+            expires is not None
+            and signature is not None
+            and signing.verify(digest, expires, signature, config.effective_signing_key)
+        )
+        if not signed:
+            auth.current_identity(request, svc)
+
         try:
             data = svc.assets.get(digest)
         except (AssetNotFoundError, ValueError) as error:
@@ -401,21 +446,21 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             # job it already created, not a second one doing the same work twice.
             response.status_code = 200
             log.info("job.idempotent", extra={"job_id": str(stored.id)})
-            return JobView.of(stored)
+            return viewed(stored)
 
         svc.queue.send(str(stored.id), editor=body.editor, user_id=str(principal))
         log.info(
             "job.created",
             extra={"job_id": str(stored.id), "op": spec.op.value, "editor": body.editor},
         )
-        return JobView.of(stored)
+        return viewed(stored)
 
     @app.get("/v1/jobs/{job_id}", response_model=JobView)
     def read_job(job_id: UUID, svc: ServicesDep, principal: PrincipalDep) -> JobView:
         job = svc.jobs.get(job_id, user_id=principal)
         if job is None:
             raise HTTPException(404, "no such job")
-        return JobView.of(job)
+        return viewed(job)
 
     @app.post("/v1/jobs/{job_id}/cancel", response_model=JobView)
     def cancel_job(job_id: UUID, svc: ServicesDep, principal: PrincipalDep) -> JobView:
@@ -430,7 +475,7 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             raise HTTPException(404, "no such job")
         cancelled = svc.jobs.save(job.cancel(), user_id=principal)
         _publish(svc, cancelled)
-        return JobView.of(cancelled)
+        return viewed(cancelled)
 
     @app.get("/v1/jobs/{job_id}/events")
     def job_events(job_id: UUID, svc: ServicesDep, principal: PrincipalDep) -> StreamingResponse:

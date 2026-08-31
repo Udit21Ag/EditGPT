@@ -46,12 +46,18 @@ export function VersionStrip({
                 : "border-transparent hover:border-neutral-300 dark:hover:border-neutral-700"
             }`}
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={urls.get(version.sha256) ?? ""}
-              alt=""
-              className="h-16 w-full rounded object-cover"
-            />
+            {/* An empty `src` makes a browser re-request the page itself, so a version
+                with no link yet renders a placeholder instead. */}
+            {urls.get(version.sha256) !== undefined ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={urls.get(version.sha256)}
+                alt=""
+                className="h-16 w-full rounded object-cover"
+              />
+            ) : (
+              <span className="h-16 w-full rounded bg-neutral-200 dark:bg-neutral-800" />
+            )}
             <span className="w-full truncate text-[11px]">{version.label}</span>
           </button>
         ))}
