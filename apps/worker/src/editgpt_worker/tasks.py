@@ -25,7 +25,15 @@ from uuid import UUID
 from editgpt_core import EditSpec, Job, JobState
 from editgpt_core.errors import EditGPTError, ProviderExhaustedError
 from editgpt_core.logs import bound
-from editgpt_store import ANONYMOUS_USER_ID, ProgressEvent, publish, record_artifact, record_cost
+from editgpt_store import (
+    ANONYMOUS_USER_ID,
+    Policy,
+    ProgressEvent,
+    publish,
+    record_artifact,
+    record_cost,
+)
+from editgpt_store.lifecycle import sweep
 from editgpt_store.records import record_image
 
 from editgpt_worker.app import Resources, celery_app, resources
@@ -227,6 +235,43 @@ def _advance(
 
 # Celery ships no stubs, so its decorator erases the signature. The narrow ignore keeps
 # the rest of this module strictly typed rather than silencing the file.
+@celery_app.task(name="editgpt.sweep_assets")  # type: ignore[untyped-decorator]
+def sweep_assets(dry_run: bool = False) -> dict[str, object]:
+    """Delete stored bytes nothing refers to any more. Scheduled daily; safe to run by hand.
+
+    Not `dry_run=True` by default, unlike the command a person types: this is the
+    scheduled path, and a housekeeping job that only ever reports is housekeeping nobody
+    does. What it may delete is bounded by the policy — orphans past the grace period
+    always, and referenced objects only where a deployment set a retention.
+    """
+    res = resources()
+    session_factory = getattr(res.jobs, "session_factory", None)
+    if session_factory is None:
+        # An in-memory job store knows nothing about which objects are referenced, and a
+        # sweep that cannot tell would delete the store. Skipping is the safe answer.
+        log.warning("asset.sweep_skipped", extra={"reason": "no database"})
+        return {"skipped": "no database"}
+
+    with bound(task="sweep_assets"):
+        report = sweep(
+            res.assets,
+            session_factory,
+            policy=Policy(
+                grace_hours=res.settings.asset_grace_hours,
+                retention_days=res.settings.asset_retention_days,
+            ),
+            dry_run=dry_run,
+        )
+    return {
+        "scanned": report.scanned,
+        "deleted": report.deleted,
+        "orphans": report.orphans,
+        "expired": report.expired,
+        "bytes_freed": report.bytes_freed,
+        "dry_run": report.dry_run,
+    }
+
+
 @celery_app.task(name="editgpt.run_job")  # type: ignore[untyped-decorator]
 def run_job(
     job_id: str, editor: str = "noop", user_id: str = "", request_id: str = ""

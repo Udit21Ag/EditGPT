@@ -139,6 +139,12 @@ dev-lite:  ## Gateway only. Use this when a model benchmark is also running.
 worker:  ## Run the Celery worker
 	$(PY) celery -A editgpt_worker worker --loglevel=info --concurrency=1
 
+beat:  ## Run the Celery beat scheduler (housekeeping; a worker does not do this alone)
+	$(PY) celery -A editgpt_worker beat --loglevel=info
+
+sweep:  ## Report which stored objects a sweep would delete. APPLY=1 to delete them.
+	$(PY) python -m editgpt_worker.housekeeping $(if $(APPLY),--apply,)
+
 migrate:  ## Apply database migrations
 	cd packages/store && $(UV) run alembic upgrade head
 

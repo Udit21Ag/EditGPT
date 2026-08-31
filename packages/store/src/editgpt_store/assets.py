@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -39,6 +41,21 @@ scale without a second level nobody would ever need.
 
 class AssetNotFoundError(KeyError):
     """A digest that is not in the store. Distinct from a malformed digest."""
+
+
+@dataclass(frozen=True, slots=True)
+class StoredObject:
+    """One blob as the store sees it, without reading its bytes.
+
+    `modified_at` is when the store last wrote it, which for content-addressed bytes is
+    when they first arrived — the same bytes stored again are a no-op. That is what makes
+    it usable as an age, and it is the only clock the store has: nothing here reads the
+    database.
+    """
+
+    digest: str
+    size: int
+    modified_at: datetime
 
 
 def digest_of(data: bytes) -> str:
@@ -58,6 +75,16 @@ class AssetStore(Protocol):
     def exists(self, digest: str) -> bool: ...
 
     def delete(self, digest: str) -> None: ...
+
+    def scan(self) -> Iterator[StoredObject]:
+        """Every object held, cheapest first: no bytes are read.
+
+        Lifecycle needs to answer "what is here that nothing refers to any more", and
+        that question cannot be asked of the database — the database only knows what it
+        wrote down. A blob whose row was never committed is invisible to every query and
+        is exactly the thing worth finding.
+        """
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +131,22 @@ class LocalAssetStore:
 
     def delete(self, digest: str) -> None:
         self._path(digest).unlink(missing_ok=True)
+
+    def scan(self) -> Iterator[StoredObject]:
+        if not self.root.exists():
+            return
+        for entry in sorted(self.root.glob(f"{'[0-9a-f]' * FANOUT}/*")):
+            # A `.partial` file is a write in progress, and a name that is not a digest
+            # is not ours. Neither is an object, and treating either as one would let a
+            # sweep delete bytes that were arriving as it looked.
+            if not entry.is_file() or len(entry.name) != 64:
+                continue
+            stat = entry.stat()
+            yield StoredObject(
+                digest=entry.name,
+                size=stat.st_size,
+                modified_at=datetime.fromtimestamp(stat.st_mtime, UTC),
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,6 +227,19 @@ class S3AssetStore:
     def delete(self, digest: str) -> None:
         _validate(digest)
         self.client.delete_object(Bucket=self.bucket, Key=digest)
+
+    def scan(self) -> Iterator[StoredObject]:
+        paginator = self.client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self.bucket):
+            for item in page.get("Contents", []):
+                key = str(item["Key"])
+                if len(key) != 64:
+                    continue  # not written by this system; not ours to delete
+                yield StoredObject(
+                    digest=key,
+                    size=int(item["Size"]),
+                    modified_at=item["LastModified"],
+                )
 
 
 def _validate(digest: str) -> None:

@@ -37,6 +37,19 @@ class Settings(BaseSettings):
     deployment's artifacts to a laptop's disk.
     """
 
+    asset_grace_hours: float = 24.0
+    """How long an unreferenced object is kept before a sweep may delete it.
+
+    An upload that has been stored but whose row is still being committed looks exactly
+    like an orphan for as long as that takes. A day is far longer than that window."""
+
+    asset_retention_days: int = 0
+    """Age at which a *referenced* object's bytes are deleted. Zero means never.
+
+    Off unless a deployment asks for it: the alternative is a number this project chose
+    deleting somebody's photographs on a schedule they never agreed to. The rows survive
+    either way, so history stays readable and the fetch answers 404."""
+
     task_soft_time_limit_s: int = 240
     task_time_limit_s: int = 300
     """Two limits because they do different things: the soft one raises inside the task

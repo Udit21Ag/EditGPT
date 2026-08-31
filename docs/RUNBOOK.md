@@ -138,6 +138,39 @@ Use **OrbStack** or `colima`, not Docker Desktop: roughly 1.5 GB of RAM, which o
 8 GB machine is the difference between a pipeline fitting and not. Never run the compose
 stack, the Next dev server and a model benchmark at the same time.
 
+## Housekeeping: deleting stored bytes
+
+```bash
+make sweep            # report what a sweep would delete; deletes nothing
+make sweep APPLY=1    # actually delete it
+make beat             # the scheduler that runs the sweep daily at 04:17
+```
+
+Two rules, and they are different. **Orphans** — objects no `images` or `artifacts` row
+refers to — are deleted once they are older than `EDITGPT_ASSET_GRACE_HOURS` (24h). Every
+upload that was never turned into a job leaves one, and no query can find them: the
+database only knows what it wrote down. The grace period is what keeps a sweep from
+deleting an upload whose row is still being committed.
+
+**Expiry** is off. Set `EDITGPT_ASSET_RETENTION_DAYS` and the bytes of *referenced*
+objects go once they reach that age; the rows stay, so a job's history is still readable
+and fetching its result answers 404. Nothing deletes a user's photographs on a schedule
+this project chose for them.
+
+A sweep with no database **refuses to run**: without the rows saying what is referenced,
+every object looks like an orphan and the sweep would empty the store. A worker on its
+own never sweeps — only `make beat` schedules it — so a laptop does not garbage-collect
+its own cache while you are looking at it.
+
+## Logs
+
+`EDITGPT_LOG_FORMAT=text` for a readable terminal; anything else is one JSON object per
+line on stderr. Every gateway line carries `request_id` (echoed to the client on
+`X-Request-Id`, and honoured if the client sends one); every worker line carries `job_id`,
+and `request_id` too when the job came from a request. Field names that look like
+credentials are redacted by the formatter. `jq 'select(.job_id=="…")'` is the whole
+debugging story until there are agent hops — see TD-025.
+
 ## When something is wrong
 
 **A test hangs or fails on the network.** Sockets are disabled in tests. Something is
@@ -187,6 +220,11 @@ make memory                  # RSS tier, needs weights
 ```
 
 ## Deploying the gateway behind a browser
+
+`EDITGPT_URL_SIGNING_KEY` must be set: image links are HMAC-signed so an `<img src>` can
+load them without a session, and with no key configured each process signs with one it
+generated for itself — links break on restart and a second replica cannot verify the
+first's. `openssl rand -base64 32`. `/ready` lists it as a degradation until it is set.
 
 `EDITGPT_CORS_ORIGINS` must name the origin the app is served from. It defaults to the two
 local development ports, which allows nothing useful anywhere else — and without it the

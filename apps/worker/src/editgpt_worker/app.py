@@ -18,6 +18,7 @@ from functools import lru_cache
 from typing import Any
 
 from celery import Celery
+from celery.schedules import crontab
 from editgpt_core.logs import configure as configure_logs
 from editgpt_store import (
     AssetStore,
@@ -58,6 +59,12 @@ def make_celery(settings: Settings | None = None) -> Celery:
         # fields — pass index, strategy, cost, job id — are formatted away exactly as they
         # were before any of this existed, and only the message survives.
         worker_hijack_root_logger=False,
+        # Housekeeping, daily, at an hour nobody is editing. It only runs where a beat
+        # process runs (`make beat`); a worker on its own executes jobs and nothing else,
+        # which is what keeps a developer's laptop from sweeping their own cache.
+        beat_schedule={
+            "sweep-assets": {"task": "editgpt.sweep_assets", "schedule": crontab(hour=4, minute=17)}
+        },
     )
     # No `autodiscover_tasks` here. It would import `editgpt_worker.tasks` while this
     # module is still executing, and that module imports `celery_app` from here — a cycle.

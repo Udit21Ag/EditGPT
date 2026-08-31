@@ -182,6 +182,24 @@ who took them; dropping them changes what the picture looks like.
 | Local model cache | ONNX weights, `~/.cache/editgpt/models` (~552 MB)          | live                                                            |
 | `evals/photos`    | golden fixtures, committed                                 | live                                                            |
 
+## What the store keeps, and for how long
+
+Content-addressed bytes have no owner and no expiry of their own — the name is the
+content, and nothing about a digest says whether anybody still wants it. Two rules,
+`packages/store/src/editgpt_store/lifecycle.py`:
+
+- **Orphans** — objects no `images` or `artifacts` row names — go once past
+  `EDITGPT_ASSET_GRACE_HOURS`. They are invisible to every query by definition, so only a
+  scan of the store finds them; that is what `AssetStore.scan` is for. The grace period
+  exists because an upload whose row is still being committed is indistinguishable from
+  an orphan for exactly as long as that takes.
+- **Expiry** — `EDITGPT_ASSET_RETENTION_DAYS`, **off by default**. It deletes bytes, not
+  rows: a job's history stays readable and fetching its result answers 404.
+
+Fail closed: a sweep with no database raises rather than treating every object as an
+orphan. `verdict()` is pure and both a dry run and a real run call it, so the report
+cannot promise one thing and do another.
+
 ## External integrations
 
 | Service                 | Role                          | Failure behaviour                          |

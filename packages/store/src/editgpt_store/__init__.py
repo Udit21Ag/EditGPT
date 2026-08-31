@@ -9,10 +9,12 @@ from editgpt_store.assets import (
     AssetStore,
     LocalAssetStore,
     S3AssetStore,
+    StoredObject,
     digest_of,
 )
 from editgpt_store.engine import bootstrap, make_engine, make_session_factory
 from editgpt_store.jobs import InMemoryJobStore, JobStore, SqlJobStore
+from editgpt_store.lifecycle import Policy, SweepReport, sweep
 from editgpt_store.models import ANONYMOUS_USER_ID, Artifact, Base, CostEntry, Image, User
 from editgpt_store.progress import ProgressEvent, channel_for, last_event, publish, subscribe
 from editgpt_store.records import (
@@ -34,9 +36,12 @@ __all__ = [
     "InMemoryJobStore",
     "JobStore",
     "LocalAssetStore",
+    "Policy",
     "ProgressEvent",
     "S3AssetStore",
     "SqlJobStore",
+    "StoredObject",
+    "SweepReport",
     "User",
     "artifacts_for",
     "bootstrap",
@@ -51,4 +56,5 @@ __all__ = [
     "record_image",
     "spend_since",
     "subscribe",
+    "sweep",
 ]

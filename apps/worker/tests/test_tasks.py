@@ -15,7 +15,7 @@ import pytest
 from editgpt_core import AssetRef, EditOp, EditSpec, Job, JobState, MaskSource
 from editgpt_core.errors import ProviderExhaustedError, ProviderUnavailableError
 from editgpt_core.logs import current
-from editgpt_store import InMemoryJobStore, LocalAssetStore, ProgressEvent
+from editgpt_store import InMemoryJobStore, LocalAssetStore, Policy, ProgressEvent, SweepReport
 from editgpt_worker import tasks
 from editgpt_worker.app import Resources, resources
 from editgpt_worker.settings import Settings
@@ -216,6 +216,95 @@ def test_a_redelivered_message_for_a_finished_job_does_not_rerun_it(
     assert len(redis.events) == published, "a replay must not re-announce progress"
 
 
+def test_a_request_id_from_the_gateway_reaches_the_edit(res: Resources, queued: Job) -> None:
+    """The two processes' logs are only one story if the id survives the broker.
+
+    A `ContextVar` does not cross a queue, so the id travels in the message and is bound
+    again on arrival. Asserted from inside the editor, which is as deep as any line the
+    worker logs while running a job.
+    """
+    seen: dict[str, object] = {}
+
+    def watching(source: bytes, spec: EditSpec) -> tasks.Produced:
+        seen.update(current())
+        return tasks.EDITORS["noop"](source, spec)
+
+    tasks.EDITORS["watching"] = watching
+    try:
+        tasks.run_job(str(queued.id), editor="watching", request_id="trace-xyz")
+    finally:
+        del tasks.EDITORS["watching"]
+
+    assert seen["request_id"] == "trace-xyz"
+    assert seen["job_id"] == str(queued.id)
+
+
+def test_a_job_with_no_request_behind_it_binds_no_empty_field(res: Resources, queued: Job) -> None:
+    """An empty `request_id` on every replayed or scheduled job is noise, not correlation."""
+    seen: dict[str, object] = {}
+
+    def watching(source: bytes, spec: EditSpec) -> tasks.Produced:
+        seen.update(current())
+        return tasks.EDITORS["noop"](source, spec)
+
+    tasks.EDITORS["watching"] = watching
+    try:
+        tasks.run_job(str(queued.id), editor="watching")
+    finally:
+        del tasks.EDITORS["watching"]
+
+    assert "request_id" not in seen
+
+
+# ---------------------------------------------------------------- housekeeping
+
+
+def test_a_sweep_with_no_database_skips_instead_of_emptying_the_store(res: Resources) -> None:
+    """Fail closed. Without the rows that say what is referenced, everything looks orphaned."""
+    digest = res.assets.put(b"a photograph", content_type="image/png")
+
+    result = tasks.sweep_assets()
+
+    assert result == {"skipped": "no database"}
+    assert res.assets.exists(digest), "a sweep with no references deleted a stored image"
+
+
+def test_the_sweep_task_passes_the_deployment_s_policy_through(
+    res: Resources, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retention nobody configured must not arrive as a number this code invented."""
+    from editgpt_store import SqlJobStore, make_engine, make_session_factory
+
+    engine = make_engine(f"sqlite+pysqlite:///{tmp_path / 'sweep.db'}")
+    from editgpt_store import bootstrap
+
+    bootstrap(engine)
+    configured = Resources(
+        settings=Settings(
+            environment="test",
+            asset_root=tmp_path / "assets",
+            asset_grace_hours=3.0,
+            asset_retention_days=45,
+        ),
+        jobs=SqlJobStore(session_factory=make_session_factory(engine)),
+        assets=res.assets,
+        redis=res.redis,
+    )
+    monkeypatch.setattr(tasks, "resources", lambda: configured)
+    seen: dict[str, object] = {}
+
+    def spy(assets: object, session_factory: object, **kwargs: object) -> SweepReport:
+        seen.update(kwargs)
+        return SweepReport(scanned=0)
+
+    monkeypatch.setattr(tasks, "sweep", spy)
+    result = tasks.sweep_assets()
+
+    assert seen["policy"] == Policy(grace_hours=3.0, retention_days=45)
+    assert seen["dry_run"] is False, "the scheduled run has to actually delete something"
+    assert result["scanned"] == 0
+
+
 def test_an_unknown_job_is_reported_rather_than_raised(res: Resources) -> None:
     """Raising would make Celery retry a message that can never succeed."""
     result = tasks.run_job("1c1b1a19-0000-4000-8000-000000000000")
@@ -290,43 +379,3 @@ def test_grounding_runs_at_the_bounded_size(
 
     assert seen == [(2048, 1536)], f"grounding ran at {seen}, not the bounded size"
     assert answer["candidates"], "a candidate should have come back"
-
-
-def test_a_request_id_from_the_gateway_reaches_the_edit(res: Resources, queued: Job) -> None:
-    """The two processes' logs are only one story if the id survives the broker.
-
-    A `ContextVar` does not cross a queue, so the id travels in the message and is bound
-    again on arrival. Asserted from inside the editor, which is as deep as any line the
-    worker logs while running a job.
-    """
-    seen: dict[str, object] = {}
-
-    def watching(source: bytes, spec: EditSpec) -> tasks.Produced:
-        seen.update(current())
-        return tasks.EDITORS["noop"](source, spec)
-
-    tasks.EDITORS["watching"] = watching
-    try:
-        tasks.run_job(str(queued.id), editor="watching", request_id="trace-xyz")
-    finally:
-        del tasks.EDITORS["watching"]
-
-    assert seen["request_id"] == "trace-xyz"
-    assert seen["job_id"] == str(queued.id)
-
-
-def test_a_job_with_no_request_behind_it_binds_no_empty_field(res: Resources, queued: Job) -> None:
-    """An empty `request_id` on every replayed or scheduled job is noise, not correlation."""
-    seen: dict[str, object] = {}
-
-    def watching(source: bytes, spec: EditSpec) -> tasks.Produced:
-        seen.update(current())
-        return tasks.EDITORS["noop"](source, spec)
-
-    tasks.EDITORS["watching"] = watching
-    try:
-        tasks.run_job(str(queued.id), editor="watching")
-    finally:
-        del tasks.EDITORS["watching"]
-
-    assert "request_id" not in seen
