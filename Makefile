@@ -16,7 +16,8 @@ WEB   := $(PNPM) --filter @editgpt/web
         bench-grounding bench-grounding-clipseg bench-removal bench-tune bench-classifier \
         bench-ambiguity \
         web-lint web-types web-test web-build models eval memory dev dev-lite worker \
-        migrate migration compose-up compose-s3 compose-down clean
+        migrate migration compose-up compose-s3 compose-down clean \
+        e2e load beat sweep
 
 help:  ## Show the targets worth knowing
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -138,6 +139,12 @@ dev-lite:  ## Gateway only. Use this when a model benchmark is also running.
 # breach the 8 GB budget before either finishes. See apps/worker/AGENTS.md.
 worker:  ## Run the Celery worker
 	$(PY) celery -A editgpt_worker worker --loglevel=info --concurrency=1
+
+# Not in `make check`: it needs a running stack and takes minutes.
+load:  ## Load test the gateway. USERS=10 TIME=60s HOST=http://localhost:8000
+	$(UV) run --group load locust -f benchmarks/load/locustfile.py --headless \
+		--users $(or $(USERS),10) --spawn-rate 2 --run-time $(or $(TIME),60s) \
+		--host $(or $(HOST),http://localhost:8000)
 
 beat:  ## Run the Celery beat scheduler (housekeeping; a worker does not do this alone)
 	$(PY) celery -A editgpt_worker beat --loglevel=info

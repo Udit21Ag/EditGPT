@@ -505,8 +505,24 @@ now, and a job that needs a provider is refused *before* grounding rather than a
 millisecond instead of a full detector-and-segmenter run. A user sees "set
 CLOUDFLARE_ACCOUNT_ID…" or "retry in about 47s"; the raw HTTP reply stays in the log.
 
-**Not yet:** object lifecycle and expiry (links expire; the objects behind them do not),
-OTel spans, and the locust load test. Sentry is skipped by choice.
+**Also delivered 31 Aug 2026.** **Object lifecycle.** Signed links expired; the objects
+behind them did not. A sweep deletes orphans — objects no row names, which is every
+upload that never became a job and which no query can find — and, where a deployment sets
+a retention, the bytes of old referenced objects while their rows survive. Verified live:
+two objects stored, one recorded; a dry run reported one orphan and deleted nothing, then
+`APPLY=1` deleted exactly it. Fail-closed with no database, because without references
+everything looks orphaned. **The locust load test**: 44 uploads and 11 jobs in 30 s
+against a gateway with no worker behind it, upload median 3 ms and 79 ms at p90, and every
+job correctly reported as never finishing — which is the queue-depth failure it exists to
+show.
+
+**Settled, not built:** OTel spans, [TD-025](../harness/tech_debt_tracker.md). A request
+id is minted at the gateway, echoed on `X-Request-Id`, carried across the broker in the
+task message and re-bound in the worker, so every line of both processes joins on it.
+Spans buy the shape of a fan-out, and there is no fan-out until Phase 6's agent mesh.
+Sentry is skipped by choice.
+
+**Phase 9 exit met.**
 
 
 Prompt-injection defence on image-derived text · NSFW/safety gate in the critic · PII/EXIF stripping ·

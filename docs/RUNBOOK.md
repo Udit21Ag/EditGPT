@@ -162,6 +162,19 @@ every object looks like an orphan and the sweep would empty the store. A worker 
 own never sweeps — only `make beat` schedules it — so a laptop does not garbage-collect
 its own cache while you are looking at it.
 
+## Load
+
+```bash
+make compose-up && make worker &      # a real drain, or the queue only grows
+make load                             # 10 users, 60s, against localhost:8000
+make load USERS=50 TIME=120s
+```
+
+A non-zero exit means failures were recorded, which includes jobs that never finished
+inside `EDITGPT_LOAD_MAX_WAIT_S`. That is the number worth watching: intake is cheap —
+uploads measured a 3 ms median, 79 ms at p90 on a laptop — and the worker drains one edit
+at a time by design, so what breaks first is the wait, not the gateway.
+
 ## Logs
 
 `EDITGPT_LOG_FORMAT=text` for a readable terminal; anything else is one JSON object per

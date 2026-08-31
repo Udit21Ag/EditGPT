@@ -31,6 +31,9 @@ dev = [
     "psutil>=6.0",
     "types-psutil>=6.0",
 ]
+load = [
+    "locust>=2.31",
+]
 
 [tool.uv.workspace]
 members = ["packages/*", "apps/gateway", "apps/worker"]
