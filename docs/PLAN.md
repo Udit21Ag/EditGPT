@@ -497,9 +497,16 @@ the generative lane's provider already enforces a policy we cannot override, and
 lane generates nothing to classify. Prompt-injection defence is not applicable until
 something reads text out of an image.
 
+**Also delivered 31 Aug 2026.** **Graceful degradation on the generative lane.** The
+failover chain and circuit breaker written in Phase 5 were never called — the worker
+constructed a bare provider, so both existed only in their own tests. They are wired in
+now, and a job that needs a provider is refused *before* grounding rather than after:
+`ProviderChain.availability()` answers without a call, so a missing key costs a
+millisecond instead of a full detector-and-segmenter run. A user sees "set
+CLOUDFLARE_ACCOUNT_ID…" or "retry in about 47s"; the raw HTTP reply stays in the log.
+
 **Not yet:** object lifecycle and expiry (links expire; the objects behind them do not),
-OTel spans, the locust load test, and graceful degradation when every provider is
-quota-exhausted. Sentry is skipped by choice.
+OTel spans, and the locust load test. Sentry is skipped by choice.
 
 
 Prompt-injection defence on image-derived text · NSFW/safety gate in the critic · PII/EXIF stripping ·

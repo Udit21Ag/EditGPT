@@ -17,7 +17,7 @@ from typing import Any
 import numpy as np
 import pytest
 from editgpt_core import AssetRef, EditOp, EditSpec, MaskSource
-from editgpt_core.errors import MaskTooSmallError
+from editgpt_core.errors import MaskTooSmallError, ProviderUnavailableError
 from editgpt_core.rle import encode as encode_rle
 from editgpt_models.execute import Edit
 from editgpt_worker import editors
@@ -233,8 +233,65 @@ def test_a_generative_operation_without_a_provider_says_which_keys_are_missing(
     from editgpt_providers import CloudflareWorkersAI
 
     monkeypatch.setattr(CloudflareWorkersAI, "is_configured", lambda _self: False)
-    with pytest.raises(ValueError, match="CLOUDFLARE_ACCOUNT_ID"):
+    with pytest.raises(ProviderUnavailableError, match="CLOUDFLARE_ACCOUNT_ID"):
         editors.models_for(spec(EditOp.ADD, content="a hat"))
+
+
+def test_a_generative_job_is_refused_before_the_image_is_ever_grounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The saving, not the message: grounding is the expensive part of a job.
+
+    Before this, a request with no provider configured ran the detector and the segmenter
+    to completion — seconds of CPU and most of the memory budget — and only then found
+    there was nowhere to send the result.
+    """
+    from editgpt_providers import CloudflareWorkersAI
+
+    monkeypatch.setattr(CloudflareWorkersAI, "is_configured", lambda _self: False)
+    grounded: list[str] = []
+    monkeypatch.setattr(editors, "region_for", lambda *_a, **_k: grounded.append("ran"))
+
+    with pytest.raises(ProviderUnavailableError):
+        editors.edit(png(), spec(EditOp.ADD, content="a hat"))
+    assert not grounded, "the image was segmented for an edit that could never run"
+
+
+def test_a_provider_that_is_backing_off_says_how_long_to_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A wait is actionable; "unavailable" is not."""
+    from editgpt_providers import CircuitBreaker, ProviderChain
+
+    class Down:
+        name = "cloudflare"
+
+        def is_configured(self) -> bool:
+            return True
+
+        def fill(self, rgb: Any, mask: Any, prompt: str) -> Any:
+            raise AssertionError("an open breaker must not be called")
+
+    chain = ProviderChain([Down()], breakers={"cloudflare": CircuitBreaker(threshold=1)})
+    chain.breakers["cloudflare"].record_failure("Workers AI 429")
+    monkeypatch.setattr(editors, "provider_chain", lambda: chain)
+
+    with pytest.raises(ProviderUnavailableError, match="retry in about"):
+        editors.check_provider(spec(EditOp.ADD, content="a hat"))
+
+
+def test_local_operations_never_ask_about_a_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Erase, upscale and recolour finish on this machine and must not depend on a key."""
+    monkeypatch.setattr(
+        editors, "provider_chain", lambda: pytest.fail("a local edit consulted the provider")
+    )
+    for op in (EditOp.REMOVE, EditOp.UPSCALE, EditOp.BACKGROUND):
+        editors.check_provider(spec(op, target="the car", content="green"))
+
+
+def test_the_chain_is_built_once_so_the_breaker_survives_a_job() -> None:
+    """A breaker rebuilt per job is not a breaker: the count has to outlive the failure."""
+    assert editors.provider_chain() is editors.provider_chain()
 
 
 def test_avif_round_trips_instead_of_silently_becoming_png(captured: dict[str, Any]) -> None:

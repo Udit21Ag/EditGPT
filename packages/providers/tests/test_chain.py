@@ -66,6 +66,40 @@ def test_all_failing_raises_with_every_reason() -> None:
     assert "b is down" in str(excinfo.value)
 
 
+def test_availability_says_ready_without_calling_anything() -> None:
+    """The whole point: an answer that costs nothing, before the expensive part of a job."""
+    healthy = Stub("a")
+    status = ProviderChain([healthy]).availability()
+    assert status.ready
+    assert healthy.calls == 0
+
+
+def test_availability_separates_unconfigured_from_failing() -> None:
+    """Two different problems: one is fixed by setting a variable, one by waiting."""
+    status = ProviderChain([Stub("a", configured=False)]).availability()
+    assert not status.ready
+    assert not status.configured
+    assert status.retry_after_s == 0.0, "waiting will not configure a provider"
+
+
+def test_availability_reports_how_long_the_back_off_has_left() -> None:
+    chain = ProviderChain([Stub("a", fails=True)], breakers={"a": CircuitBreaker(threshold=1)})
+    with pytest.raises(ProviderExhaustedError):
+        chain.fill(image(), mask(), "a hat")
+
+    status = chain.availability()
+    assert not status.ready
+    assert status.configured, "it has credentials; it is just failing"
+    assert 0 < status.retry_after_s <= 60.0
+    assert "retry in about" in status.reason
+
+
+def test_availability_ignores_a_broken_provider_when_another_is_healthy() -> None:
+    chain = ProviderChain([Stub("a"), Stub("b")], breakers={"a": CircuitBreaker(threshold=1)})
+    chain.breakers["a"].record_failure("down")
+    assert chain.availability().ready, "the chain is available while any provider is"
+
+
 def test_breaker_opens_after_repeated_failures_and_stops_calling() -> None:
     flaky = Stub("a", fails=True)
     chain = ProviderChain([flaky, Stub("b")])

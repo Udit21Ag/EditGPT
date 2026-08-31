@@ -64,6 +64,13 @@ class CircuitBreaker:
         self.health.consecutive_failures = 0
         self.health.opened_at = None
 
+    @property
+    def seconds_until_probe(self) -> float:
+        """How long until this provider is tried again. Zero when it is not backing off."""
+        if self.health.opened_at is None:
+            return 0.0
+        return max(0.0, self.cooldown_s - (time.monotonic() - self.health.opened_at))
+
     def record_failure(self, error: str) -> None:
         self.health.calls += 1
         self.health.failures += 1
@@ -71,6 +78,28 @@ class CircuitBreaker:
         self.health.last_error = error
         if self.health.consecutive_failures >= self.threshold:
             self.health.opened_at = time.monotonic()
+
+
+@dataclass(frozen=True, slots=True)
+class Availability:
+    """Whether the chain could be called at all — answered without calling it.
+
+    Exists so a caller can refuse a job *before* the expensive part of it. The worker
+    grounds an image with a detector and a segmenter before it ever reaches a provider;
+    finding out at that point that there was nowhere to send the result wastes the whole
+    run and tells the user nothing they can act on.
+    """
+
+    ready: bool
+    configured: bool = True
+    """Whether any provider has credentials. False is a different problem from a failing
+    one — it is fixed by setting a variable, not by waiting — and only the caller knows
+    which variables to name."""
+
+    reason: str = ""
+    retry_after_s: float = 0.0
+    """Seconds until the soonest provider is probed again. Zero when waiting will not
+    help."""
 
 
 @dataclass
@@ -83,6 +112,32 @@ class ProviderChain:
     def __post_init__(self) -> None:
         for provider in self.providers:
             self.breakers.setdefault(provider.name, CircuitBreaker())
+
+    def availability(self) -> Availability:
+        """Whether a call would reach anything, without making one."""
+        waits: list[float] = []
+        configured = False
+        for provider in self.providers:
+            if not provider.is_configured():
+                continue
+            configured = True
+            breaker = self.breakers[provider.name]
+            if breaker.is_open:
+                waits.append(breaker.seconds_until_probe)
+                continue
+            return Availability(ready=True)
+
+        if waits:
+            wait = min(waits)
+            return Availability(
+                ready=False,
+                reason=(
+                    "every provider is backing off after repeated failures; "
+                    f"retry in about {max(1, round(wait))}s"
+                ),
+                retry_after_s=wait,
+            )
+        return Availability(ready=False, configured=configured, reason="no provider is configured")
 
     def fill(self, rgb: RGB, mask: Mask, prompt: str) -> tuple[RGB, str]:
         """Returns the filled image and the name of the provider that produced it."""

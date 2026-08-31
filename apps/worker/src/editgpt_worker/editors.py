@@ -25,11 +25,12 @@ import io
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from editgpt_core import EditOp, EditSpec, Grounding
-from editgpt_core.errors import MaskTooSmallError
+from editgpt_core.errors import MaskTooSmallError, ProviderUnavailableError
 from editgpt_core.rle import decode as decode_rle
 from editgpt_models.compositing import RGB, Mask, reproject
 from editgpt_models.config import load_thresholds
@@ -37,6 +38,9 @@ from editgpt_models.execute import Models, execute
 from editgpt_models.registry import model_path
 from editgpt_models.segment import Segmentation
 from editgpt_models.slot import ModelSlot
+
+if TYPE_CHECKING:
+    from editgpt_providers import ProviderChain
 
 log = logging.getLogger(__name__)
 
@@ -243,6 +247,49 @@ def _fit_mask(mask: Mask, image: RGB) -> Mask:
     return np.asarray(resized, dtype=np.uint8)
 
 
+LOCAL_OPS = frozenset({EditOp.REMOVE, EditOp.UPSCALE, EditOp.BACKGROUND})
+"""Operations that finish on this machine. Everything else needs a provider.
+
+One set, consulted by both the pre-flight and the loader, so the two cannot come to
+disagree about which operations can run offline."""
+
+PROVIDER_KEYS = "set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN"
+
+
+@lru_cache(maxsize=1)
+def provider_chain() -> ProviderChain:
+    """The generative lane, one chain per worker process.
+
+    Cached because a circuit breaker rebuilt per job is not a breaker: the point of it is
+    that three failures in a row stop the fourth call, and the count only survives if the
+    chain does. Celery runs `--concurrency=1`, so one process is one chain.
+
+    The chain was written in Phase 5 and, until now, never called — the worker constructed
+    a bare provider instead, so failover and back-off existed only in their own tests.
+    """
+    from editgpt_providers import CloudflareWorkersAI
+    from editgpt_providers import ProviderChain as Chain
+
+    return Chain([CloudflareWorkersAI()])
+
+
+def check_provider(spec: EditSpec) -> None:
+    """Refuse a generative operation before anything is loaded, rather than after.
+
+    `region_for` runs the detector and the segmenter — seconds of CPU and most of the
+    memory budget — and only then does the fill discover there is nowhere to send it.
+    Asking the chain first costs a dictionary lookup, and turns the whole wasted run into
+    an immediate failure a user can act on.
+    """
+    if spec.op in LOCAL_OPS:
+        return
+    status = provider_chain().availability()
+    if status.ready:
+        return
+    detail = status.reason if status.configured else f"{status.reason}: {PROVIDER_KEYS}"
+    raise ProviderUnavailableError(f"{spec.op} needs a generative provider — {detail}")
+
+
 def models_for(spec: EditSpec) -> Models:
     """Load only what this operation needs, one session at a time.
 
@@ -256,15 +303,19 @@ def models_for(spec: EditSpec) -> Models:
     if spec.op is EditOp.BACKGROUND:
         return Models()
 
-    from editgpt_providers import CloudflareWorkersAI
+    check_provider(spec)
+    chain = provider_chain()
 
-    provider = CloudflareWorkersAI()
-    if not provider.is_configured():
-        raise ValueError(
-            f"{spec.op} needs a generative provider and none is configured; "
-            "set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN"
-        )
-    return Models(fill=provider.fill)
+    def fill(rgb: RGB, mask: Mask, prompt: str) -> RGB:
+        """The chain's answer without the name of who gave it.
+
+        `execute` wants a filler, not a routing decision; which provider served the call
+        is already on the `provider.filled` line the chain logs.
+        """
+        filled, _who = chain.fill(rgb, mask, prompt)
+        return filled
+
+    return Models(fill=fill)
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,6 +336,7 @@ class Edited:
 
 def edit(source: bytes, spec: EditSpec) -> Edited:
     """Run the job's edit and return the encoded result with its real shape."""
+    check_provider(spec)
     original = decode_image(source)
     image = working_size(original)
     region = region_for(spec, image)

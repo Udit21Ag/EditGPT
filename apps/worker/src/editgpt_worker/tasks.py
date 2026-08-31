@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from editgpt_core import EditSpec, Job, JobState
+from editgpt_core.errors import EditGPTError, ProviderExhaustedError
 from editgpt_core.logs import bound
 from editgpt_store import ANONYMOUS_USER_ID, ProgressEvent, publish, record_artifact, record_cost
 from editgpt_store.records import record_image
@@ -304,7 +305,7 @@ def _run_job(job_id: str, *, editor: str, user_id: str) -> dict[str, object]:
         # not BaseException. That matters, because a timeout escaping here would leave
         # the job in `running` with no explanation, which is the exact failure the two
         # time limits exist to avoid.
-        reason = f"{type(error).__name__}: {error}"
+        reason = _reason(error)
         log.exception("job.failed", extra={"job_id": job_id})
         current = res.jobs.get(identifier, user_id=owner)
         if current is not None and not current.is_terminal:
@@ -312,6 +313,25 @@ def _run_job(job_id: str, *, editor: str, user_id: str) -> dict[str, object]:
             res.jobs.save(failed, user_id=owner)
             _announce(res, failed, detail=reason)
         return {"job_id": job_id, "state": JobState.FAILED.value, "error": reason}
+
+
+def _reason(error: BaseException) -> str:
+    """What the user is told when a job fails.
+
+    A failure this system raises deliberately already carries a sentence written for a
+    person, and prefixing it with the class name only adds noise. Everything else keeps
+    the type, because `RuntimeError: ...` from somewhere unexpected is exactly what a
+    reader needs to see.
+
+    Exhaustion is the one case that is deliberately *less* specific here: its message
+    quotes every provider's HTTP reply, which belongs in the log line directly above and
+    not on a page the user cannot act on.
+    """
+    if isinstance(error, ProviderExhaustedError):
+        return "the image generator did not answer; the job can be retried"
+    if isinstance(error, EditGPTError):
+        return str(error)
+    return f"{type(error).__name__}: {error}"
 
 
 def _record_outputs(

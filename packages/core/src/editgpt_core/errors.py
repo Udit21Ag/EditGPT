@@ -25,7 +25,20 @@ class ProviderError(EditGPTError):
 
 
 class ProviderExhaustedError(ProviderError):
-    """Every configured provider failed or is out of quota."""
+    """Every configured provider failed or is out of quota.
+
+    Raised *after* the calls were made, so the message carries somebody else's HTTP
+    replies: right in a log, wrong on a page. Callers that show a user should say
+    something shorter and let the log keep the detail.
+    """
+
+
+class ProviderUnavailableError(ProviderError):
+    """No provider could be called at all — none configured, or all backing off.
+
+    Distinct from exhaustion because nothing was tried and the message is safe to show:
+    it names the variable to set, or the seconds to wait.
+    """
 
 
 class IllegalTransitionError(EditGPTError):

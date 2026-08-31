@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from editgpt_core import AssetRef, EditOp, EditSpec, Job, JobState, MaskSource
+from editgpt_core.errors import ProviderExhaustedError, ProviderUnavailableError
 from editgpt_store import InMemoryJobStore, LocalAssetStore, ProgressEvent
 from editgpt_worker import tasks
 from editgpt_worker.app import Resources, resources
@@ -158,6 +159,48 @@ def test_an_editor_that_raises_fails_the_job_rather_than_leaving_it_running(
     assert finished is not None
     assert finished.error == "RuntimeError: the model fell over"
     assert redis.events[-1].terminal is True, "a watching client must be told it ended"
+
+
+def test_a_provider_failure_does_not_put_somebody_elses_http_reply_on_the_page(
+    res: Resources, queued: Job
+) -> None:
+    """Exhaustion carries every provider's raw response. That belongs in the log."""
+
+    def exhausted(source: bytes, spec: EditSpec) -> tasks.Produced:
+        raise ProviderExhaustedError(
+            "every provider failed or was unavailable: "
+            "{'cloudflare': 'Workers AI 429: {\"errors\":[{\"code\":10000}]}'}"
+        )
+
+    tasks.EDITORS["exhausted"] = exhausted
+    try:
+        tasks.run_job(str(queued.id), editor="exhausted")
+    finally:
+        del tasks.EDITORS["exhausted"]
+
+    finished = res.jobs.get(queued.id)
+    assert finished is not None
+    assert finished.error is not None
+    assert "429" not in finished.error
+    assert "cloudflare" not in finished.error
+    assert "retried" in finished.error, "a user should be told what to do next"
+
+
+def test_a_deliberate_failure_is_shown_as_written(res: Resources, queued: Job) -> None:
+    """Our own errors are sentences already; `ProviderUnavailableError: ` adds nothing."""
+
+    def unavailable(source: bytes, spec: EditSpec) -> tasks.Produced:
+        raise ProviderUnavailableError("add needs a generative provider — set the keys")
+
+    tasks.EDITORS["unavailable"] = unavailable
+    try:
+        tasks.run_job(str(queued.id), editor="unavailable")
+    finally:
+        del tasks.EDITORS["unavailable"]
+
+    finished = res.jobs.get(queued.id)
+    assert finished is not None
+    assert finished.error == "add needs a generative provider — set the keys"
 
 
 def test_a_redelivered_message_for_a_finished_job_does_not_rerun_it(

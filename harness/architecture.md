@@ -113,7 +113,7 @@ approve a region before any model time is spent.
 ranked candidates; `points` runs SAM alone and returns the one region under the taps,
 including negative points for what came along and should not have. They share a response
 so the client has a single code path. Keeping them separate is not tidiness: a tap is
-usually what a user reaches for *because* words failed, and re-running the model that just
+usually what a user reaches for _because_ words failed, and re-running the model that just
 failed to understand them would cost 200 MB to give the same answer again. Measured on the
 same picture: a phrase takes ~6.9 s, a tap 0.4-1.2 s.
 
@@ -124,15 +124,15 @@ against 0.07, and a chooser there is friction for nothing. The client shows the 
 found and keeps the alternatives one tap away.
 
 **The chosen mask travels with the job.** Re-grounding server-side would discard the
-user's choice, pay for the expensive half of SAM twice, and can return a *different* mask
+user's choice, pay for the expensive half of SAM twice, and can return a _different_ mask
 the second time. It also means the worker skips grounding entirely — the detector and the
 SAM encoder, about two seconds and 2 GB.
 
 **Sizes.** Grounding runs at the worker's bounded working size, so a candidate's mask is
-at most 2048 on its longest side and *not* the upload's resolution. `EditSpec` therefore
+at most 2048 on its longest side and _not_ the upload's resolution. `EditSpec` therefore
 accepts a mask at any size whose aspect matches the image and lets the worker scale it;
 requiring an exact match only forced clients to upscale a mask the worker scales straight
-back down. `decode_image` keeps full resolution for the *result* (TD-021) — do not reuse
+back down. `decode_image` keeps full resolution for the _result_ (TD-021) — do not reuse
 it for grounding, which regressed once exactly that way.
 
 **Every mask on the wire is COCO RLE**: column-major, opening with a run of zeros, so odd
@@ -149,7 +149,7 @@ revoked it, the whole download in front of the first paint, and the browser's ow
 made useless.
 
 Expiry is checked separately from the comparison, because an expired signature is still
-*arithmetically* valid; the comparison is constant-time, because the obvious one leaks a
+_arithmetically_ valid; the comparison is constant-time, because the obvious one leaks a
 signature a byte at a time. `EDITGPT_URL_SIGNING_KEY` must be set wherever there is more
 than one process or a restart policy — otherwise each process signs with its own key and
 `/ready` says so.
@@ -166,7 +166,7 @@ outdoors would have carried the coordinates.
 untouched; JPEG, PNG and WebP are edited at the segment or chunk level with the compressed
 data never decoded. Measured on a 15.9 MP photograph: 19 EXIF tags removed, pixels
 bit-identical, 640 KB smaller because the embedded thumbnail went with them. Only a
-container this cannot edit in place *and* that carries metadata is re-encoded, and it says
+container this cannot edit in place _and_ that carries metadata is re-encoded, and it says
 so in the log.
 
 **ICC profiles and JFIF density are kept.** They describe how to interpret the pixels, not
@@ -192,6 +192,24 @@ who took them; dropping them changes what the picture looks like.
 
 No credential values appear in this repository. Names of required variables are in
 `.env.example`; how to obtain them is in `docs/RUNBOOK.md`.
+
+### When the generative lane cannot be reached
+
+`ADD`, `REPLACE`, `RESTYLE` and `RETOUCH` need a provider; `REMOVE`, `UPSCALE` and
+`BACKGROUND` finish on this machine (`editors.LOCAL_OPS`). A job in the first group is
+refused **before `region_for` runs** — grounding is seconds of CPU and most of the memory
+budget, and discovering afterwards that there was nowhere to send the result wastes all of
+it. `ProviderChain.availability()` answers without making a call.
+
+The chain is `lru_cache`d per worker process, because a circuit breaker rebuilt per job is
+not a breaker — three failures in a row only stop the fourth call if the count outlives the
+job.
+
+Two failures, deliberately worded differently. `ProviderUnavailableError` means nothing was
+tried: the message names the variable to set or the seconds to wait, and reaches the user
+as written. `ProviderExhaustedError` means everything was tried and failed: its message
+quotes somebody else's HTTP replies, so `tasks._reason` replaces it with a sentence and
+lets the log keep the detail.
 
 ## Deployment
 

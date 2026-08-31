@@ -10,6 +10,7 @@ erase a car it produced a stone slab, then a different car, then a boulder. See 
 """
 
 from editgpt_providers.base import (
+    Availability,
     CircuitBreaker,
     Provider,
     ProviderChain,
@@ -18,6 +19,7 @@ from editgpt_providers.base import (
 from editgpt_providers.cloudflare import CloudflareWorkersAI
 
 __all__ = [
+    "Availability",
     "CircuitBreaker",
     "CloudflareWorkersAI",
     "Provider",

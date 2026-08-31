@@ -12,6 +12,7 @@ from editgpt_core.errors import (
     MaskTooSmallError,
     ProviderError,
     ProviderExhaustedError,
+    ProviderUnavailableError,
     ValidationError,
 )
 from editgpt_core.jobs import Job, JobState, JobStep, can_transition, check_transition
@@ -43,6 +44,7 @@ __all__ = [
     "MaskTooSmallError",
     "ProviderError",
     "ProviderExhaustedError",
+    "ProviderUnavailableError",
     "ValidationError",
     "can_transition",
     "check_transition",
