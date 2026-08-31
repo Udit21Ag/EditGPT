@@ -271,3 +271,21 @@ def test_an_upload_is_stored_without_the_camera_that_took_it(
     stored = services.assets.get(response.json()["sha256"])
     with Image.open(io.BytesIO(stored)) as image:
         assert dict(image.getexif()) == {}, "the camera came with it"
+
+
+def test_every_response_carries_a_request_id(client: TestClient) -> None:
+    """The id in a user's console has to be the one in the logs, or it is decoration."""
+    response = client.get("/health")
+    assert response.headers.get("x-request-id")
+
+
+def test_an_inbound_request_id_survives_the_hop(client: TestClient) -> None:
+    """A trace begun by a proxy or a client should not be renamed here."""
+    response = client.get("/health", headers={"X-Request-Id": "trace-abc"})
+    assert response.headers["x-request-id"] == "trace-abc"
+
+
+def test_two_requests_get_different_ids(client: TestClient) -> None:
+    first = client.get("/health").headers["x-request-id"]
+    second = client.get("/health").headers["x-request-id"]
+    assert first != second

@@ -4,6 +4,26 @@
 **Solves:** making the system diagnosable without shipping noise or leaking data.
 **Authority:** binding on what may be logged.
 
+## How
+
+`editgpt_core.logs.configure(service=...)` once at startup, then log with `extra={...}`.
+One JSON object per line, on stderr; `EDITGPT_LOG_FORMAT=text` for a terminal.
+
+**`bound(**fields)` for correlation.** Anything logged inside the block carries those
+fields, including from code that knows nothing about them — the gateway binds
+`request_id` per request, the worker binds `job_id` for a whole task. Threading an
+identifier through forty call sites is how that stops happening by the third one.
+
+**Credentials are removed by the formatter, not by remembering.** A field whose *name*
+contains `token`, `secret`, `password`, `key`, `authorization`, `credential` or `cookie`
+is replaced. Deliberately broad: a redacted field that did not need to be is a moment of
+confusion, and the alternative is a leak nobody notices.
+
+Two traps, both of which had already thrown this away once. Nothing configured logging at
+all, so thirty-one `extra={...}` call sites rendered as a bare message. And Celery replaces
+the root logger's handlers when a worker starts — `worker_hijack_root_logger=False` is
+what keeps the worker's fields.
+
 ## Logging
 
 A log line should let someone reconstruct what happened without a debugger. Include:

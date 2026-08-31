@@ -18,6 +18,7 @@ from functools import lru_cache
 from typing import Any
 
 from celery import Celery
+from editgpt_core.logs import configure as configure_logs
 from editgpt_store import (
     AssetStore,
     JobStore,
@@ -52,6 +53,11 @@ def make_celery(settings: Settings | None = None) -> Celery:
         # visibly instead, which is the honest outcome for work that costs real quota.
         task_reject_on_worker_lost=True,
         broker_connection_retry_on_startup=True,
+        # Celery replaces the root logger's handlers when a worker starts, which happens
+        # *after* this module configures them. Without this the worker's structured
+        # fields — pass index, strategy, cost, job id — are formatted away exactly as they
+        # were before any of this existed, and only the message survives.
+        worker_hijack_root_logger=False,
     )
     # No `autodiscover_tasks` here. It would import `editgpt_worker.tasks` while this
     # module is still executing, and that module imports `celery_app` from here — a cycle.
@@ -106,3 +112,11 @@ def resources() -> Resources:
         assets=store,
         redis=redis.Redis.from_url(config.redis_url),
     )
+
+
+configure_logs(service="worker")
+"""At import, because a Celery worker's entry point is this module rather than a `main`.
+
+Uvicorn and Celery both install a handler of their own; `configure` replaces them, so this
+has to run once and early rather than per task.
+"""

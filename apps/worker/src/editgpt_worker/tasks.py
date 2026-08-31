@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from editgpt_core import EditSpec, Job, JobState
+from editgpt_core.logs import bound
 from editgpt_store import ANONYMOUS_USER_ID, ProgressEvent, publish, record_artifact, record_cost
 from editgpt_store.records import record_image
 
@@ -237,6 +238,17 @@ def run_job(job_id: str, editor: str = "noop", user_id: str = "") -> dict[str, o
     Returns a small summary rather than the image: the result is in the asset store and
     referenced by digest, and putting pixels in a Celery result backend would put them in
     Redis, which is the one place in this system sized in megabytes.
+    """
+    with bound(job_id=job_id, editor=editor):
+        return _run_job(job_id, editor=editor, user_id=user_id)
+
+
+def _run_job(job_id: str, *, editor: str, user_id: str) -> dict[str, object]:
+    """The body, so `run_job` is only the correlation wrapper.
+
+    Split rather than indenting three hundred lines under a `with`: every line this emits
+    — and every line the pipeline emits beneath it — then carries the job it belongs to,
+    which is the difference between a log a person can follow and one they cannot.
     """
     res = resources()
     identifier = UUID(job_id)

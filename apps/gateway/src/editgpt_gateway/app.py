@@ -15,7 +15,7 @@ import logging
 import time
 from collections.abc import Iterator
 from typing import Annotated, Any, Self
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from editgpt_core import (
     AssetRef,
@@ -28,6 +28,8 @@ from editgpt_core import (
     MaskRef,
     MaskSource,
 )
+from editgpt_core.logs import bound
+from editgpt_core.logs import configure as configure_logs
 from editgpt_store import AssetNotFoundError, ProgressEvent, last_event, record_image, subscribe
 from fastapi import FastAPI, Header, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -227,8 +229,23 @@ class JobView(BaseModel):
 
 def create_app(settings: Settings | None = None, services: Services | None = None) -> FastAPI:
     config = settings or get_settings()
+    configure_logs(service="gateway")
     app = FastAPI(title="EditGPT gateway", version=API_VERSION)
     app.state.services = services or build_services(config)
+
+    @app.middleware("http")
+    async def _correlate(request: Request, call_next: Any) -> Response:
+        """Give every request an id, and put it on every line logged while it runs.
+
+        Honours an inbound `X-Request-Id` so a trace begun by a proxy or a client survives
+        the hop, and echoes it back so the id in a user's console matches the one in the
+        logs — which is the whole point of having one.
+        """
+        request_id = request.headers.get("x-request-id") or uuid4().hex
+        with bound(request_id=request_id):
+            response: Response = await call_next(request)
+        response.headers["x-request-id"] = request_id
+        return response
 
     # Without this a browser never reaches any route below: the preflight is answered by
     # the router, which knows nothing about `OPTIONS`, and returns 405.
