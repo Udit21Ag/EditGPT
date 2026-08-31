@@ -58,10 +58,10 @@ evidence the pictures are fine; a flagged case is an instruction to open one.
 
 `apps/web` runs two Vitest projects, declared in `vitest.workspace.ts`.
 
-| Project   | Environment    | Runs                        |
-| --------- | -------------- | --------------------------- |
-| `unit`    | jsdom          | everything else             |
-| `browser` | real Chromium  | `*.browser.test.{ts,tsx}`   |
+| Project   | Environment   | Runs                      |
+| --------- | ------------- | ------------------------- |
+| `unit`    | jsdom         | everything else           |
+| `browser` | real Chromium | `*.browser.test.{ts,tsx}` |
 
 The split is not a preference. jsdom has no 2-D canvas context, so `vitest.setup.jsdom.ts`
 makes `getContext` return null and every component test runs against the degradation path.
@@ -85,8 +85,8 @@ Two traps that suite found, both worth knowing before writing another:
 need a gateway, a database and — for the signed-in half — a Clerk user.
 
 They answer a different question from the `browser` Vitest project. That one drives the
-same components with `fetch` replaced and proves the *client* works; this proves the
-*deployment* does, with Clerk really issuing a session and the gateway really accepting
+same components with `fetch` replaced and proves the _client_ works; this proves the
+_deployment_ does, with Clerk really issuing a session and the gateway really accepting
 it. Both exist because they fail for different reasons.
 
 The smoke specs need no credentials and run on every checkout. They assert what the two

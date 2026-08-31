@@ -32,31 +32,31 @@ paid. It still stays visible.
 
 ## Register
 
-| ID     | Title                                                        | Status   | Priority | Area       |
-| ------ | ------------------------------------------------------------ | -------- | -------- | ---------- |
-| TD-001 | CLIPSeg runs on torch, costing ~1 GB of overhead             | open     | P2       | models     |
-| TD-002 | Cast shadows survive object removal                          | accepted | P1       | models     |
-| TD-003 | Both erasers smear geometric structure                       | open     | P2       | models     |
-| TD-004 | The mask swallows objects that occlude or touch the target   | open     | P1       | models     |
-| TD-005 | Background op only handles flat backdrops                    | open     | P2       | models     |
-| TD-006 | Two of seven planned operations unimplemented                | accepted | P2       | models     |
-| TD-007 | Eval quality is not diffed against main in CI                | resolved | P1       | evals      |
-| TD-008 | Add-mask plausibility is unchecked                           | open     | P2       | providers  |
-| TD-009 | Visible transition artifact at the mask boundary             | open     | P2       | models     |
-| TD-010 | Upscaling is too slow to be interactive                      | accepted | P2       | models     |
-| TD-011 | Pass reporting conflated "not applicable" with "rolled back" | resolved | P1       | models     |
-| TD-012 | Grounding does not generalise beyond the dev set             | open     | P1       | models     |
-| TD-013 | Fill cost's failure did not replicate on a second dataset    | open     | P2       | core       |
-| TD-017 | RemovalBench and RORD disagree about which eraser is better  | open     | P1       | benchmarks |
-| TD-018 | Authentication is unimplemented pending a product decision   | resolved | P1       | gateway    |
-| TD-019 | Any signed-in user can fetch any image by its digest         | open     | P2       | gateway    |
-| TD-014 | Fine-tuning CLIPSeg is blocked on hardware                   | accepted | P2       | models     |
-| TD-015 | Relational referring expressions are not grounded at all     | resolved | P1       | models     |
-| TD-016 | Recorded result dimensions assume the edit preserves them    | resolved | P2       | store      |
-| TD-020 | The background colour is fixed green, not requested          | resolved | P2       | models     |
-| TD-021 | Edits come back at 2048 px, not the uploaded resolution      | resolved | P1       | worker     |
-| TD-022 | A provider's blank frame was composited as a result          | resolved | P1       | providers  |
-| TD-023 | A phrase matching nothing still returns a confident region  | open     | P2       | models     |
+| ID     | Title                                                                | Status   | Priority | Area       |
+| ------ | -------------------------------------------------------------------- | -------- | -------- | ---------- |
+| TD-001 | CLIPSeg runs on torch, costing ~1 GB of overhead                     | open     | P2       | models     |
+| TD-002 | Cast shadows survive object removal                                  | accepted | P1       | models     |
+| TD-003 | Both erasers smear geometric structure                               | open     | P2       | models     |
+| TD-004 | The mask swallows objects that occlude or touch the target           | open     | P1       | models     |
+| TD-005 | Background op only handles flat backdrops                            | open     | P2       | models     |
+| TD-006 | Two of seven planned operations unimplemented                        | accepted | P2       | models     |
+| TD-007 | Eval quality is not diffed against main in CI                        | resolved | P1       | evals      |
+| TD-008 | Add-mask plausibility is unchecked                                   | open     | P2       | providers  |
+| TD-009 | Visible transition artifact at the mask boundary                     | open     | P2       | models     |
+| TD-010 | Upscaling is too slow to be interactive                              | accepted | P2       | models     |
+| TD-011 | Pass reporting conflated "not applicable" with "rolled back"         | resolved | P1       | models     |
+| TD-012 | Grounding does not generalise beyond the dev set                     | open     | P1       | models     |
+| TD-013 | Fill cost's failure did not replicate on a second dataset            | open     | P2       | core       |
+| TD-017 | RemovalBench and RORD disagree about which eraser is better          | open     | P1       | benchmarks |
+| TD-018 | Authentication is unimplemented pending a product decision           | resolved | P1       | gateway    |
+| TD-019 | Any signed-in user can fetch any image by its digest                 | open     | P2       | gateway    |
+| TD-014 | Fine-tuning CLIPSeg is blocked on hardware                           | accepted | P2       | models     |
+| TD-015 | Relational referring expressions are not grounded at all             | resolved | P1       | models     |
+| TD-016 | Recorded result dimensions assume the edit preserves them            | resolved | P2       | store      |
+| TD-020 | The background colour is fixed green, not requested                  | resolved | P2       | models     |
+| TD-021 | Edits come back at 2048 px, not the uploaded resolution              | resolved | P1       | worker     |
+| TD-022 | A provider's blank frame was composited as a result                  | resolved | P1       | providers  |
+| TD-023 | A phrase matching nothing still returns a confident region           | open     | P2       | models     |
 | TD-024 | Route protection is middleware path matching, which Clerk deprecated | open     | P2       | web        |
 
 ---
@@ -112,7 +112,7 @@ limitation, not a bug.
 
 Status: open · Priority: **P1** (was P2) · Identified: 2026-08-25 · Updated: 2026-08-27 · Area: `packages/models`
 **Problem:** the mask covers things the user did not name. Two mechanisms compound:
-SAM returns a *solid silhouette* for a box prompt, so anything overlapping the target is
+SAM returns a _solid silhouette_ for a box prompt, so anything overlapping the target is
 inside it; and dilation then treats every boundary as a background boundary and widens
 further into whatever stands in front.
 **Why it matters:** it silently damages content nobody asked to change — the worst class
@@ -121,7 +121,7 @@ of defect, because it is not where the user is looking.
 
 - **i8** "remove the Eiffel Tower" — the mask is a solid tower silhouette, and the jumping
   figure's shoe sits inside it. The shoe is erased with the tower.
-- **i9** "remove the cricket bat" — the mask traces the bat *and* the glove gripping it.
+- **i9** "remove the cricket bat" — the mask traces the bat _and_ the glove gripping it.
   The batsman's hand is erased.
 
 **Raised to P1** because it is now the most visible remaining defect in the product, and
@@ -143,7 +143,7 @@ the product worse, which is worth recording in full because the next person will
 same idea.
 
 The shield probes SAM with point prompts across the band dilation would reach, every
-probe *outside* the target, and withholds any returned region that is coherent, bounded,
+probe _outside_ the target, and withholds any returned region that is coherent, bounded,
 and mostly not the target. Measured on the golden set:
 
 - `i8`: the jumper's shoe goes from 10.3% erased to 0.5%. The shoe is visibly intact.
@@ -153,7 +153,7 @@ and mostly not the target. Measured on the golden set:
   far more visible than the smeared shoe it prevents.
 
 **What that revealed is the real finding.** Dilation had been silently compensating for
-SAM *under*-segmenting an object where it meets clutter. Withhold the ring where the
+SAM _under_-segmenting an object where it meets clutter. Withhold the ring where the
 tower meets the tree line and the compensation goes with it. The bleed and the
 under-segmentation are the same 5% of slack doing two jobs, and removing the slack from
 one job removes it from both. Occluder detection is not the missing piece; a mask that is
@@ -161,15 +161,15 @@ right at the boundary is.
 
 **Two things measured along the way, both worth not re-deriving:**
 
-- *SAM is part-aware.* A probe near a horse's edge returns **the leg** — small, confident,
+- _SAM is part-aware._ A probe near a horse's edge returns **the leg** — small, confident,
   low IoU against the whole horse. Filtering on size or IoU shields a quarter of the
   animal from its own erasure. Containment is the test that separates a part from an
   occluder, at 0.30; at the 0.80 first tried, the horse regression returns.
-- *Probing is affordable.* Skipping probe points already covered by an earlier probe's
+- _Probing is affordable._ Skipping probe points already covered by an earlier probe's
   region turns an 8 px grid into ~30 decoder calls and 0.8 s, because one probe on the
   sky explains all of the sky.
 
-**Still unfixed and out of reach here:** an occluder *inside* the silhouette — the glove
+**Still unfixed and out of reach here:** an occluder _inside_ the silhouette — the glove
 gripping the bat in `i9`, which SAM folds into the bat. Outward probing cannot see it,
 and probing inward is what caused the horse regression. Separating the two needs the mask
 hierarchy of MobileSAM's **multi-mask decoder**; the export in the registry is
@@ -236,7 +236,7 @@ records a new baseline once a human has looked at the pictures.
 **What blocks and what only reports, and why the split is not arbitrary.** A case that
 stopped working, a case that vanished from the run, and a drop in grounding IoU all
 block: each has a right answer. A cost move only reports. That is this project's own
-measurement talking — TD-017 has two paired benchmarks disagreeing on the *sign* of
+measurement talking — TD-017 has two paired benchmarks disagreeing on the _sign_ of
 cost's correlation with visual quality, and TD-004 supplied the sharpest example yet: the
 occluder shield moved `i8` by +1.8 cost while visibly ruining it and moved `i6` by -13.5
 while improving it. Gating on that number would be a coin toss wearing a lab coat.
@@ -250,7 +250,7 @@ scored 0.400 against 0.000 between two runs of unchanged code.
 Measured, not assumed — two runs of identical code gave the same cost to the decimal for
 all eleven removals and pixel-identical images. There is no reproducibility noise to
 leave headroom for, which is why the cost tolerance came down from a guessed 15% to 5%.
-The remaining unknown is the *cross-machine* floor: a CI worker has a different CPU and
+The remaining unknown is the _cross-machine_ floor: a CI worker has a different CPU and
 ONNX Runtime build, and that has not been measured yet. Both the image and cost checks
 therefore only report; a tolerance that turns out too tight costs a line in a comment
 rather than a red build. Tighten them once CI has run enough times to show its floor.
@@ -553,8 +553,8 @@ erase is minutes of model work, and the multi-pass loop runs an eraser up to thr
 **Workaround:** none.
 **Trigger:** any user who downloads a result.
 **Resolved 2026-08-28** by `compositing.reproject`, and not by editing at full
-resolution. Two knobs had been collapsed into one: `MAX_SIDE` now bounds the *work* and
-no longer bounds the *answer*. The edit still runs at 2048 px; the finished result is
+resolution. Two knobs had been collapsed into one: `MAX_SIDE` now bounds the _work_ and
+no longer bounds the _answer_. The edit still runs at 2048 px; the finished result is
 blended onto the full-resolution original, where the alpha is zero outside the mask so
 the untouched pixels are the original's own rather than a downscale-and-upscale of them.
 
@@ -565,7 +565,7 @@ bounded return had actually been discarding was the ~90% of the photograph that 
 edited.
 
 **Editing at full resolution was the obvious fix and is the wrong one:** `fill_metrics`
-runs two full-frame colour conversions and a 60 px dilation *per pass*, so it would have
+runs two full-frame colour conversions and a 60 px dilation _per pass_, so it would have
 put the multi-pass loop on the megapixel count for no visible gain.
 **`UPSCALE` stays bounded on both sides** — its purpose is to enlarge, so a 15.9 MP input
 would ask Real-ESRGAN for a 63 MP output and meet the RSS ceiling first.
@@ -595,7 +595,7 @@ and was correct.
 
 Status: open · Priority: P2 · Identified: 2026-08-28 · Area: `packages/models`
 **Problem:** grounding "a unicorn" against a photograph of the Taj Mahal returns one
-candidate at margin 1.000, which the ambiguity gate reads as *certainty* and answers
+candidate at margin 1.000, which the ambiguity gate reads as _certainty_ and answers
 without asking. Measured live on 2026-08-28 while verifying the picker.
 **Why it matters:** the empty-candidates branch — "nothing here matches those words,
 try describing it differently" — is written on both sides of the wire and effectively
@@ -610,7 +610,7 @@ scores maximally unambiguous.
 is edited, and "Not what you meant?" opens the alternatives. The user sees the wrong
 region rather than discovering it in the result.
 **Why deferred:** ADR-0003 measured absolute detection score as a much weaker separator
-than the margin and rejected it as the *gate*. Using it as an abstention signal is a
+than the margin and rejected it as the _gate_. Using it as an abstention signal is a
 different question and needs its own measurement rather than a guessed threshold.
 **Trigger:** a user reports an edit to something they did not name.
 **Resolution:** measure whether the top score separates present from absent phrases on a
@@ -628,7 +628,7 @@ protected resources reachable." It prints on every dev server start.
 different opinions about what a URL means, and the gap between them is reachable.
 **Why it is not urgent here:** the gateway is the real boundary and it fails closed —
 `apps/web/e2e/smoke.spec.ts` asserts an unauthenticated `POST /v1/jobs` is a 401. The middleware
-decides which *pages* render, not what data anyone can reach, so a divergence would show a
+decides which _pages_ render, not what data anyone can reach, so a divergence would show a
 signed-out visitor an empty editor rather than anybody's pictures.
 **Workaround:** none needed; the allowlist is of public routes, so anything new is
 protected by default.

@@ -14,7 +14,7 @@ fields, including from code that knows nothing about them — the gateway binds
 `request_id` per request, the worker binds `job_id` for a whole task. Threading an
 identifier through forty call sites is how that stops happening by the third one.
 
-**Credentials are removed by the formatter, not by remembering.** A field whose *name*
+**Credentials are removed by the formatter, not by remembering.** A field whose _name_
 contains `token`, `secret`, `password`, `key`, `authorization`, `credential` or `cookie`
 is replaced. Deliberately broad: a redacted field that did not need to be is a moment of
 confusion, and the alternative is a leak nobody notices.

@@ -83,9 +83,7 @@ function candidate(
 async function drawn(canvas: HTMLCanvasElement): Promise<ImageData> {
   return vi.waitFor(
     () => {
-      const data = canvas
-        .getContext("2d")!
-        .getImageData(0, 0, canvas.width, canvas.height);
+      const data = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height);
       if (!data.data.some((v, i) => i % 4 === 3 && v > 0)) throw new Error("canvas is blank");
       return data;
     },

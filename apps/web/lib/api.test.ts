@@ -1,12 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  ApiError,
-  createJob,
-  groundPhrase,
-  groundPoints,
-  streamJob,
-  uploadImage,
-} from "./api";
+import { ApiError, createJob, groundPhrase, groundPoints, streamJob, uploadImage } from "./api";
 
 const token = async () => "session-token";
 const noToken = async () => null;

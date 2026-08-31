@@ -43,7 +43,11 @@ function rect(x0: number, y0: number, x1: number, y1: number) {
     for (let y = 0; y < 60; y += 1) {
       const bit = x >= x0 && x < x1 && y >= y0 && y < y1 ? 1 : 0;
       if (bit === previous) run += 1;
-      else { counts.push(run); run = 1; previous = bit; }
+      else {
+        counts.push(run);
+        run = 1;
+        previous = bit;
+      }
     }
   }
   counts.push(run);
@@ -109,7 +113,16 @@ function serve(over: Partial<Server> = {}) {
     }
     if (path === "/v1/jobs" && init?.method === "POST") {
       return json(
-        { id: "job-1", state: "queued", progress: 0, op: "remove", result_sha256: null, result_url: "", error: null, steps: [] },
+        {
+          id: "job-1",
+          state: "queued",
+          progress: 0,
+          op: "remove",
+          result_sha256: null,
+          result_url: "",
+          error: null,
+          steps: [],
+        },
         202,
       );
     }
@@ -120,7 +133,10 @@ function serve(over: Partial<Server> = {}) {
     }
     if (path === "/v1/jobs/job-1") {
       return json({
-        id: "job-1", state: "done", progress: 1, op: "remove",
+        id: "job-1",
+        state: "done",
+        progress: 1,
+        op: "remove",
         result_sha256: RESULT,
         result_url: png("#20c060"),
         error: null,
@@ -250,7 +266,11 @@ describe("the flow", () => {
     await screen.findByText(/region that will change/i);
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
 
-    const history = await screen.findByRole("radiogroup", { name: /version history/i }, { timeout: 5000 });
+    const history = await screen.findByRole(
+      "radiogroup",
+      { name: /version history/i },
+      { timeout: 5000 },
+    );
     expect(history.querySelectorAll('[role="radio"]')).toHaveLength(2);
     expect(history.textContent).toContain("removed the car");
   });
@@ -267,7 +287,11 @@ describe("tapping instead of describing", () => {
     canvas.style.height = "225px";
 
     const box = canvas.getBoundingClientRect();
-    const point = { clientX: box.left + box.width * 0.3, clientY: box.top + box.height * 0.3, pointerId: 1 };
+    const point = {
+      clientX: box.left + box.width * 0.3,
+      clientY: box.top + box.height * 0.3,
+      pointerId: 1,
+    };
     fireEvent.pointerDown(canvas, point);
     fireEvent.pointerUp(canvas, point);
 
@@ -298,7 +322,9 @@ describe("when the gateway cannot be reached", () => {
 
     render(<Workspace getToken={token} />);
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
-    fireEvent.change(input, { target: { files: [new File(["x"], "p.png", { type: "image/png" })] } });
+    fireEvent.change(input, {
+      target: { files: [new File(["x"], "p.png", { type: "image/png" })] },
+    });
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/could not reach the gateway/i);

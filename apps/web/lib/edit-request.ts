@@ -56,7 +56,11 @@ export const OPERATIONS: readonly OperationSpec[] = [
   {
     op: "remove",
     label: "Remove",
-    examples: [["the car", ""], ["the person on the left", ""], ["the sign", ""]],
+    examples: [
+      ["the car", ""],
+      ["the person on the left", ""],
+      ["the sign", ""],
+    ],
     picksColour: false,
     requiresTarget: true,
     acceptsTarget: true,
@@ -67,7 +71,10 @@ export const OPERATIONS: readonly OperationSpec[] = [
   {
     op: "replace",
     label: "Replace",
-    examples: [["the horse", "a white sheep grazing"], ["the sofa", "a leather armchair"]],
+    examples: [
+      ["the horse", "a white sheep grazing"],
+      ["the sofa", "a leather armchair"],
+    ],
     picksColour: false,
     requiresTarget: true,
     acceptsTarget: true,
@@ -78,7 +85,10 @@ export const OPERATIONS: readonly OperationSpec[] = [
   {
     op: "add",
     label: "Add",
-    examples: [["the upper lip", "a realistic moustache"], ["the wall", "a framed picture"]],
+    examples: [
+      ["the upper lip", "a realistic moustache"],
+      ["the wall", "a framed picture"],
+    ],
     picksColour: false,
     requiresTarget: true,
     acceptsTarget: true,
@@ -91,7 +101,10 @@ export const OPERATIONS: readonly OperationSpec[] = [
     // subject is the fallback for when the border is not a uniform backdrop (TD-005).
     op: "background",
     label: "Background",
-    examples: [["the person", ""], ["", ""]],
+    examples: [
+      ["the person", ""],
+      ["", ""],
+    ],
     picksColour: true,
     requiresTarget: false,
     acceptsTarget: true,

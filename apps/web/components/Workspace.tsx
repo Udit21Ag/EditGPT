@@ -112,7 +112,12 @@ export function Workspace({ getToken }: { getToken: GetToken }) {
   // Blob URLs are held by the browser until revoked; without this every picture opened
   // in a session stays in memory for the life of the tab.
   useEffect(() => () => stopStream.current?.(), []);
-  useEffect(() => () => { if (imageUrl !== null) URL.revokeObjectURL(imageUrl); }, [imageUrl]);
+  useEffect(
+    () => () => {
+      if (imageUrl !== null) URL.revokeObjectURL(imageUrl);
+    },
+    [imageUrl],
+  );
   useEffect(() => {
     const held = urls.current;
     return () => {
@@ -159,11 +164,7 @@ export function Workspace({ getToken }: { getToken: GetToken }) {
   const regionFor = useCallback((): Region => {
     if (mode === "draw") {
       if (image === null || (!hasMask(strokes) && tapMask === null)) return PHRASE;
-      const drawn = maskFromStrokes(
-        strokes.strokes,
-        maskSize(image.width, image.height),
-        tapMask,
-      );
+      const drawn = maskFromStrokes(strokes.strokes, maskSize(image.width, image.height), tapMask);
       return drawn === null ? PHRASE : { kind: "drawn", mask: drawn };
     }
     if (candidates !== null && selected >= 0) {
@@ -420,7 +421,11 @@ export function Workspace({ getToken }: { getToken: GetToken }) {
           </div>
 
           {spec.acceptsTarget ? (
-            <div className="flex flex-wrap items-center gap-2" role="group" aria-label="How to choose the region">
+            <div
+              className="flex flex-wrap items-center gap-2"
+              role="group"
+              aria-label="How to choose the region"
+            >
               <button
                 type="button"
                 aria-pressed={mode === "describe"}

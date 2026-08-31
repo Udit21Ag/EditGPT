@@ -64,7 +64,8 @@ function useFramed(candidates: readonly Candidate[], aspect: number): Framed[] {
         return {
           candidate,
           window: windowAround(box, aspect),
-          tint: typeof document === "undefined" ? null : tintCanvas(candidate.mask, TINT, 0.4, pixels),
+          tint:
+            typeof document === "undefined" ? null : tintCanvas(candidate.mask, TINT, 0.4, pixels),
         };
       }),
     [candidates, aspect],
@@ -177,8 +178,8 @@ export function CandidatePicker({
       className="flex flex-col gap-3"
     >
       <p className="text-sm text-neutral-600 dark:text-neutral-400">
-        More than one thing matches <span className="font-medium">“{phrase}”</span>. Pick the
-        one you meant.
+        More than one thing matches <span className="font-medium">“{phrase}”</span>. Pick the one
+        you meant.
       </p>
 
       <div className="-mx-1 flex snap-x gap-3 overflow-x-auto px-1 pb-2">

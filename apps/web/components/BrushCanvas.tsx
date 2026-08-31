@@ -269,10 +269,20 @@ export function BrushCanvas({
           ))}
         </span>
 
-        <button type="button" onClick={() => onChange(undo(history))} disabled={!canUndo(history)} className={button}>
+        <button
+          type="button"
+          onClick={() => onChange(undo(history))}
+          disabled={!canUndo(history)}
+          className={button}
+        >
           Undo
         </button>
-        <button type="button" onClick={() => onChange(redo(history))} disabled={!canRedo(history)} className={button}>
+        <button
+          type="button"
+          onClick={() => onChange(redo(history))}
+          disabled={!canRedo(history)}
+          className={button}
+        >
           Redo
         </button>
         <button

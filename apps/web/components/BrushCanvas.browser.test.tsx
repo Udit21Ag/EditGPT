@@ -181,7 +181,6 @@ describe("the tools", () => {
   });
 });
 
-
 describe("tapping to select", () => {
   function tap(canvas: HTMLCanvasElement, [x, y]: [number, number], drift = 0) {
     const box = canvas.getBoundingClientRect();

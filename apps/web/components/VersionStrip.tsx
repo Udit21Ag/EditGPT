@@ -30,7 +30,11 @@ export function VersionStrip({
   return (
     <section className="flex flex-col gap-2">
       <h2 className="text-xs font-medium text-neutral-600 dark:text-neutral-400">History</h2>
-      <div role="radiogroup" aria-label="Version history" className="flex gap-2 overflow-x-auto pb-1">
+      <div
+        role="radiogroup"
+        aria-label="Version history"
+        className="flex gap-2 overflow-x-auto pb-1"
+      >
         {versions.map((version, index) => (
           <button
             key={version.sha256}
