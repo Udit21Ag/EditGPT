@@ -9,6 +9,7 @@ one and link back, so the reasoning stays auditable.
 | [0001](0001-model-routing.md) | Model selection and local/remote routing | accepted, extended after Phase 1 |
 | [0002](0002-text-grounding.md) | Grounding DINO replaces CLIPSeg as the text lane | accepted |
 | [0003](0003-ask-when-unsure.md) | Offer candidates instead of guessing | accepted |
+| [0004](0004-content-safety.md) | No content classifier; the generative provider is the control | accepted |
 
 ## When an ADR is warranted
 

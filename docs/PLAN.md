@@ -484,10 +484,22 @@ smaller. **CORS**, which did not exist at all and which the browser suite found:
 explicit origin allowlist, credentials off, and `/ready` now reports a deployment that
 kept the development defaults.
 
-**Not yet:** signed URL expiry and object lifecycle, structured JSON logs, OTel spans,
-Sentry, the locust load test, and graceful degradation when every provider is
-quota-exhausted. Prompt-injection defence and the NSFW gate wait on there being
-image-derived text and a critic to put them in, neither of which exists yet.
+**Also delivered 30 Aug 2026.** **Signed image links** — `GET /v1/images/{digest}` takes a
+signature instead of a session, so an `<img src>` loads a picture directly; every image
+used to be fetched by script and wrapped in an object URL. **Structured JSON logs** with
+correlation: thirty-one `extra={...}` call sites were rendering as bare messages because
+nothing configured logging, and Celery was replacing the handlers on top of that. Every
+gateway line now carries a request id, every worker line the job id, and credentials are
+removed by the formatter rather than by remembering.
+
+**Settled, not built:** [ADR-0004](adr/0004-content-safety.md). No content classifier —
+the generative lane's provider already enforces a policy we cannot override, and the local
+lane generates nothing to classify. Prompt-injection defence is not applicable until
+something reads text out of an image.
+
+**Not yet:** object lifecycle and expiry (links expire; the objects behind them do not),
+OTel spans, the locust load test, and graceful degradation when every provider is
+quota-exhausted. Sentry is skipped by choice.
 
 
 Prompt-injection defence on image-derived text · NSFW/safety gate in the critic · PII/EXIF stripping ·
