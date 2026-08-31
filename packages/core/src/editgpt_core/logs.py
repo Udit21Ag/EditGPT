@@ -50,6 +50,16 @@ def bound(**fields: Any) -> Iterator[None]:
         _CONTEXT.reset(token)
 
 
+def current() -> dict[str, Any]:
+    """The fields bound right now, copied.
+
+    For handing a correlating id to something that leaves this process — a queued task
+    carries it in its message rather than in a `ContextVar`, because the other end is a
+    different process and a `ContextVar` does not cross a broker.
+    """
+    return dict(_CONTEXT.get() or {})
+
+
 REDACT = ("token", "secret", "password", "key", "authorization", "credential", "cookie")
 """Substrings that make a field name suspicious. Matched case-insensitively, on the *name*.
 

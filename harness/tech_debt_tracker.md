@@ -32,32 +32,33 @@ paid. It still stays visible.
 
 ## Register
 
-| ID     | Title                                                                | Status   | Priority | Area       |
-| ------ | -------------------------------------------------------------------- | -------- | -------- | ---------- |
-| TD-001 | CLIPSeg runs on torch, costing ~1 GB of overhead                     | open     | P2       | models     |
-| TD-002 | Cast shadows survive object removal                                  | accepted | P1       | models     |
-| TD-003 | Both erasers smear geometric structure                               | open     | P2       | models     |
-| TD-004 | The mask swallows objects that occlude or touch the target           | open     | P1       | models     |
-| TD-005 | Background op only handles flat backdrops                            | open     | P2       | models     |
-| TD-006 | Two of seven planned operations unimplemented                        | accepted | P2       | models     |
-| TD-007 | Eval quality is not diffed against main in CI                        | resolved | P1       | evals      |
-| TD-008 | Add-mask plausibility is unchecked                                   | open     | P2       | providers  |
-| TD-009 | Visible transition artifact at the mask boundary                     | open     | P2       | models     |
-| TD-010 | Upscaling is too slow to be interactive                              | accepted | P2       | models     |
-| TD-011 | Pass reporting conflated "not applicable" with "rolled back"         | resolved | P1       | models     |
-| TD-012 | Grounding does not generalise beyond the dev set                     | open     | P1       | models     |
-| TD-013 | Fill cost's failure did not replicate on a second dataset            | open     | P2       | core       |
-| TD-017 | RemovalBench and RORD disagree about which eraser is better          | open     | P1       | benchmarks |
-| TD-018 | Authentication is unimplemented pending a product decision           | resolved | P1       | gateway    |
-| TD-019 | Any signed-in user can fetch any image by its digest                 | open     | P2       | gateway    |
-| TD-014 | Fine-tuning CLIPSeg is blocked on hardware                           | accepted | P2       | models     |
-| TD-015 | Relational referring expressions are not grounded at all             | resolved | P1       | models     |
-| TD-016 | Recorded result dimensions assume the edit preserves them            | resolved | P2       | store      |
-| TD-020 | The background colour is fixed green, not requested                  | resolved | P2       | models     |
-| TD-021 | Edits come back at 2048 px, not the uploaded resolution              | resolved | P1       | worker     |
-| TD-022 | A provider's blank frame was composited as a result                  | resolved | P1       | providers  |
-| TD-023 | A phrase matching nothing still returns a confident region           | open     | P2       | models     |
-| TD-024 | Route protection is middleware path matching, which Clerk deprecated | open     | P2       | web        |
+| ID     | Title                                                                | Status   | Priority | Area          |
+| ------ | -------------------------------------------------------------------- | -------- | -------- | ------------- |
+| TD-001 | CLIPSeg runs on torch, costing ~1 GB of overhead                     | open     | P2       | models        |
+| TD-002 | Cast shadows survive object removal                                  | accepted | P1       | models        |
+| TD-003 | Both erasers smear geometric structure                               | open     | P2       | models        |
+| TD-004 | The mask swallows objects that occlude or touch the target           | open     | P1       | models        |
+| TD-005 | Background op only handles flat backdrops                            | open     | P2       | models        |
+| TD-006 | Two of seven planned operations unimplemented                        | accepted | P2       | models        |
+| TD-007 | Eval quality is not diffed against main in CI                        | resolved | P1       | evals         |
+| TD-008 | Add-mask plausibility is unchecked                                   | open     | P2       | providers     |
+| TD-009 | Visible transition artifact at the mask boundary                     | open     | P2       | models        |
+| TD-010 | Upscaling is too slow to be interactive                              | accepted | P2       | models        |
+| TD-011 | Pass reporting conflated "not applicable" with "rolled back"         | resolved | P1       | models        |
+| TD-012 | Grounding does not generalise beyond the dev set                     | open     | P1       | models        |
+| TD-013 | Fill cost's failure did not replicate on a second dataset            | open     | P2       | core          |
+| TD-017 | RemovalBench and RORD disagree about which eraser is better          | open     | P1       | benchmarks    |
+| TD-018 | Authentication is unimplemented pending a product decision           | resolved | P1       | gateway       |
+| TD-019 | Any signed-in user can fetch any image by its digest                 | open     | P2       | gateway       |
+| TD-014 | Fine-tuning CLIPSeg is blocked on hardware                           | accepted | P2       | models        |
+| TD-015 | Relational referring expressions are not grounded at all             | resolved | P1       | models        |
+| TD-016 | Recorded result dimensions assume the edit preserves them            | resolved | P2       | store         |
+| TD-020 | The background colour is fixed green, not requested                  | resolved | P2       | models        |
+| TD-021 | Edits come back at 2048 px, not the uploaded resolution              | resolved | P1       | worker        |
+| TD-022 | A provider's blank frame was composited as a result                  | resolved | P1       | providers     |
+| TD-023 | A phrase matching nothing still returns a confident region           | open     | P2       | models        |
+| TD-024 | Route protection is middleware path matching, which Clerk deprecated | open     | P2       | web           |
+| TD-025 | Tracing is correlated log fields, not spans                          | open     | P2       | observability |
 
 ---
 
@@ -636,3 +637,23 @@ protected by default.
 `createRouteMatcher` in Clerk's next major.
 **Resolution:** move the check into each page and layout that reads protected data, per
 Clerk's migration guide, and keep the middleware for redirects only.
+
+### TD-025 — Tracing is correlated log fields, not spans
+
+Status: open · Priority: P2 · Identified: 2026-08-31 · Area: observability
+**Problem:** the plan asks for OpenTelemetry spans across agent hops with a shared trace
+id. What exists is a request id minted at the gateway, echoed on `X-Request-Id`, carried
+across the broker in the task message and re-bound in the worker, plus a job id on every
+line beneath it. Every line can be joined; nothing is timed as a tree.
+**Why it matters:** with two processes and one queue, joining on an id answers "what
+happened to this request" completely. It stops answering when a request fans out — which
+is exactly what Phase 6's agent mesh introduces, and where the duration of each hop stops
+being derivable from timestamps in one log.
+**Why deferred:** there are no agent hops yet. Adding the SDK now means instrumenting two
+processes and running a collector to draw a two-node graph that `request_id` already
+gives, on a machine with 8 GB and a free tier with nowhere to send spans.
+**Workaround:** `request_id` + `job_id` on every line, JSON, greppable. The gateway's
+`_correlate` middleware and `bound()` are already the seam an exporter would attach to.
+**Trigger:** the first A2A hop, or any fan-out where one request becomes concurrent work.
+**Resolution:** OTel SDK with the W3C `traceparent` header instead of `X-Request-Id`, the
+same propagation point in `CeleryQueue.send`, and a free-tier collector chosen in Phase 10.

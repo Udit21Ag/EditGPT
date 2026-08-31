@@ -43,7 +43,9 @@ class Queue:
     architectural invariant 3. It sends a message by name.
     """
 
-    def send(self, job_id: str, *, editor: str = "noop", user_id: str = "") -> None:
+    def send(
+        self, job_id: str, *, editor: str = "noop", user_id: str = "", request_id: str = ""
+    ) -> None:
         raise NotImplementedError
 
     def call(self, name: str, *args: object, timeout_s: float = 30.0) -> dict[str, object]:
@@ -62,12 +64,21 @@ class CeleryQueue(Queue):
 
     app: Any
 
-    def send(self, job_id: str, *, editor: str = "noop", user_id: str = "") -> None:
+    def send(
+        self, job_id: str, *, editor: str = "noop", user_id: str = "", request_id: str = ""
+    ) -> None:
         # The owner travels with the message. The worker then has no way to read a job
         # without knowing whose it is, which means there is no privileged bypass to
         # forget to protect later.
+        #
+        # So does the request id, for the same reason in a different register: a
+        # `ContextVar` does not cross a broker, and without it the line that says a user
+        # asked for an edit and the lines that say what happened to it are in two
+        # processes with nothing in common.
         self.app.send_task(
-            "editgpt.run_job", args=[job_id], kwargs={"editor": editor, "user_id": user_id}
+            "editgpt.run_job",
+            args=[job_id],
+            kwargs={"editor": editor, "user_id": user_id, "request_id": request_id},
         )
 
     def call(self, name: str, *args: object, timeout_s: float = 30.0) -> dict[str, object]:
@@ -83,8 +94,10 @@ class RecordingQueue(Queue):
     called: list[tuple[str, tuple[object, ...]]] = field(default_factory=list)
     answers: dict[str, dict[str, object]] = field(default_factory=dict)
 
-    def send(self, job_id: str, *, editor: str = "noop", user_id: str = "") -> None:
-        del user_id
+    def send(
+        self, job_id: str, *, editor: str = "noop", user_id: str = "", request_id: str = ""
+    ) -> None:
+        del user_id, request_id
         self.sent.append((job_id, editor))
 
     def call(self, name: str, *args: object, timeout_s: float = 30.0) -> dict[str, object]:

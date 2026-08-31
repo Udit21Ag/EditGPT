@@ -228,7 +228,9 @@ def _advance(
 # Celery ships no stubs, so its decorator erases the signature. The narrow ignore keeps
 # the rest of this module strictly typed rather than silencing the file.
 @celery_app.task(name="editgpt.run_job")  # type: ignore[untyped-decorator]
-def run_job(job_id: str, editor: str = "noop", user_id: str = "") -> dict[str, object]:
+def run_job(
+    job_id: str, editor: str = "noop", user_id: str = "", request_id: str = ""
+) -> dict[str, object]:
     """Drive one job from `queued` to a terminal state.
 
     `user_id` travels with the message rather than being looked up here, so the worker has
@@ -240,7 +242,12 @@ def run_job(job_id: str, editor: str = "noop", user_id: str = "") -> dict[str, o
     referenced by digest, and putting pixels in a Celery result backend would put them in
     Redis, which is the one place in this system sized in megabytes.
     """
-    with bound(job_id=job_id, editor=editor):
+    # `request_id` only when there is one: an empty field in every worker line is noise,
+    # and a job started by anything other than a request genuinely has no trace to join.
+    correlation = {"job_id": job_id, "editor": editor}
+    if request_id:
+        correlation["request_id"] = request_id
+    with bound(**correlation):
         return _run_job(job_id, editor=editor, user_id=user_id)
 
 

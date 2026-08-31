@@ -97,10 +97,12 @@ class EagerQueue(Queue):
         self.sent: list[tuple[str, str]] = []
         self.execute = execute
 
-    def send(self, job_id: str, *, editor: str = "noop", user_id: str = "") -> None:
+    def send(
+        self, job_id: str, *, editor: str = "noop", user_id: str = "", request_id: str = ""
+    ) -> None:
         self.sent.append((job_id, editor))
         if self.execute:
-            tasks.run_job(job_id, editor=editor, user_id=user_id)
+            tasks.run_job(job_id, editor=editor, user_id=user_id, request_id=request_id)
 
 
 def png_bytes(width: int = 96, height: int = 72) -> bytes:

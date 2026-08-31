@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 from editgpt_core import AssetRef, EditOp, EditSpec, Job, JobState, MaskSource
 from editgpt_core.errors import ProviderExhaustedError, ProviderUnavailableError
+from editgpt_core.logs import current
 from editgpt_store import InMemoryJobStore, LocalAssetStore, ProgressEvent
 from editgpt_worker import tasks
 from editgpt_worker.app import Resources, resources
@@ -289,3 +290,43 @@ def test_grounding_runs_at_the_bounded_size(
 
     assert seen == [(2048, 1536)], f"grounding ran at {seen}, not the bounded size"
     assert answer["candidates"], "a candidate should have come back"
+
+
+def test_a_request_id_from_the_gateway_reaches_the_edit(res: Resources, queued: Job) -> None:
+    """The two processes' logs are only one story if the id survives the broker.
+
+    A `ContextVar` does not cross a queue, so the id travels in the message and is bound
+    again on arrival. Asserted from inside the editor, which is as deep as any line the
+    worker logs while running a job.
+    """
+    seen: dict[str, object] = {}
+
+    def watching(source: bytes, spec: EditSpec) -> tasks.Produced:
+        seen.update(current())
+        return tasks.EDITORS["noop"](source, spec)
+
+    tasks.EDITORS["watching"] = watching
+    try:
+        tasks.run_job(str(queued.id), editor="watching", request_id="trace-xyz")
+    finally:
+        del tasks.EDITORS["watching"]
+
+    assert seen["request_id"] == "trace-xyz"
+    assert seen["job_id"] == str(queued.id)
+
+
+def test_a_job_with_no_request_behind_it_binds_no_empty_field(res: Resources, queued: Job) -> None:
+    """An empty `request_id` on every replayed or scheduled job is noise, not correlation."""
+    seen: dict[str, object] = {}
+
+    def watching(source: bytes, spec: EditSpec) -> tasks.Produced:
+        seen.update(current())
+        return tasks.EDITORS["noop"](source, spec)
+
+    tasks.EDITORS["watching"] = watching
+    try:
+        tasks.run_job(str(queued.id), editor="watching")
+    finally:
+        del tasks.EDITORS["watching"]
+
+    assert "request_id" not in seen

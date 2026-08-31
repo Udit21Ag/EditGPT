@@ -276,6 +276,45 @@ def test_a_malformed_digest_is_a_422_not_a_500(client: TestClient, digest: str) 
 # ---------------------------------------------------------------- grounding
 
 
+def test_the_request_id_travels_with_the_job_to_the_worker(
+    settings: Settings, services: Services, uploaded: str
+) -> None:
+    """Correlation stops at the broker unless something carries it across.
+
+    The gateway's `request_id` lives in a `ContextVar`, which a queued message does not
+    inherit. Without this the line that says a user asked for an edit and the lines that
+    say what happened to it are in two processes with nothing in common.
+    """
+    from editgpt_gateway.deps import Queue
+
+    seen: dict[str, str] = {}
+
+    class Watching(Queue):
+        def send(
+            self, job_id: str, *, editor: str = "noop", user_id: str = "", request_id: str = ""
+        ) -> None:
+            seen["request_id"] = request_id
+
+        def call(self, name: str, *args: object, timeout_s: float = 30.0) -> dict[str, object]:
+            return {}
+
+    services.queue = Watching()
+    with TestClient(create_app(settings, services)) as client:
+        response = client.post(
+            "/v1/jobs",
+            json={
+                "op": "remove",
+                "image_sha256": uploaded,
+                "mask_source": "text",
+                "target": "the car",
+            },
+            headers={"X-Request-Id": "trace-xyz"},
+        )
+
+    assert response.status_code == 202, response.text
+    assert seen["request_id"] == "trace-xyz"
+
+
 def ground_body(digest: str, target: str = "the car") -> dict[str, Any]:
     return {"image_sha256": digest, "target": target}
 
@@ -368,7 +407,9 @@ def test_no_worker_is_a_503_and_not_a_500(
     from editgpt_gateway.deps import Queue
 
     class Dead(Queue):
-        def send(self, job_id: str, *, editor: str = "noop", user_id: str = "") -> None:
+        def send(
+            self, job_id: str, *, editor: str = "noop", user_id: str = "", request_id: str = ""
+        ) -> None:
             return None
 
         def call(self, name: str, *args: object, timeout_s: float = 30.0) -> dict[str, object]:

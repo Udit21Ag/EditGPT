@@ -14,6 +14,12 @@ fields, including from code that knows nothing about them — the gateway binds
 `request_id` per request, the worker binds `job_id` for a whole task. Threading an
 identifier through forty call sites is how that stops happening by the third one.
 
+**A correlating id crosses the broker in the message.** A `ContextVar` does not: the
+worker is a different process. `CeleryQueue.send` carries `request_id` alongside the owner,
+and `run_job` binds it again on arrival — but only when there is one, because an empty
+field on every scheduled job is noise. Tracing is these fields, not spans; TD-025 says
+when that stops being enough.
+
 **Credentials are removed by the formatter, not by remembering.** A field whose _name_
 contains `token`, `secret`, `password`, `key`, `authorization`, `credential` or `cookie`
 is replaced. Deliberately broad: a redacted field that did not need to be is a moment of

@@ -27,6 +27,7 @@ from editgpt_core import (
     JobState,
     MaskRef,
     MaskSource,
+    logs,
 )
 from editgpt_core.logs import bound
 from editgpt_core.logs import configure as configure_logs
@@ -448,7 +449,12 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             log.info("job.idempotent", extra={"job_id": str(stored.id)})
             return viewed(stored)
 
-        svc.queue.send(str(stored.id), editor=body.editor, user_id=str(principal))
+        svc.queue.send(
+            str(stored.id),
+            editor=body.editor,
+            user_id=str(principal),
+            request_id=str(logs.current().get("request_id", "")),
+        )
         log.info(
             "job.created",
             extra={"job_id": str(stored.id), "op": spec.op.value, "editor": body.editor},
