@@ -12,6 +12,7 @@ dependencies = [
     "editgpt-providers",
     "editgpt-store[s3]",
     "editgpt-gateway[clerk]",
+    "editgpt-mcp",
     "editgpt-worker",
     "python-dotenv>=1.0",
 ]
@@ -41,9 +42,13 @@ dev = [
 load = [
     "locust>=2.31",
 ]
+mcp = [
+    # 2.x: `FastMCP` is `MCPServer` there, which is what `apps/mcp` is written against.
+    "mcp>=2.0",
+]
 
 [tool.uv.workspace]
-members = ["packages/*", "apps/gateway", "apps/worker"]
+members = ["packages/*", "apps/gateway", "apps/mcp", "apps/worker"]
 
 [tool.uv.sources]
 editgpt-core = { workspace = true }
@@ -52,6 +57,7 @@ editgpt-planner = { workspace = true }
 editgpt-providers = { workspace = true }
 editgpt-store = { workspace = true }
 editgpt-gateway = { workspace = true }
+editgpt-mcp = { workspace = true }
 editgpt-worker = { workspace = true }
 
 # ---------------------------------------------------------------- lint / format
@@ -84,7 +90,7 @@ plugins = []
 # test file falls back to a path-derived name and stops colliding.
 explicit_package_bases = true
 mypy_path = """packages/core/src:packages/models/src:packages/planner/src:\
-packages/providers/src:packages/store/src:apps/gateway/src:apps/worker/src"""
+packages/providers/src:packages/store/src:apps/gateway/src:apps/mcp/src:apps/worker/src"""
 
 [[tool.mypy.overrides]]
 # Vision and runtime libraries either ship no stubs or ship stale ones. We type our own

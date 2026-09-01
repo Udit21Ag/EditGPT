@@ -17,7 +17,7 @@ WEB   := $(PNPM) --filter @editgpt/web
         bench-ambiguity bench-planner \
         web-lint web-types web-test web-build models eval memory dev dev-lite worker \
         migrate migration compose-up compose-s3 compose-down clean \
-        e2e load beat sweep
+        e2e load beat sweep mcp
 
 help:  ## Show the targets worth knowing
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -148,6 +148,9 @@ load:  ## Load test the gateway. USERS=10 TIME=60s HOST=http://localhost:8000
 	$(UV) run --group load locust -f benchmarks/load/locustfile.py --headless \
 		--users $(or $(USERS),10) --spawn-rate 2 --run-time $(or $(TIME),60s) \
 		--host $(or $(HOST),http://localhost:8000)
+
+mcp:  ## Serve the vision tools over MCP (stdio), against a running gateway
+	$(PY) python -m editgpt_mcp.server
 
 beat:  ## Run the Celery beat scheduler (housekeeping; a worker does not do this alone)
 	$(PY) celery -A editgpt_worker beat --loglevel=info

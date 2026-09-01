@@ -24,6 +24,8 @@ a larger host.
 | `packages/core`      | contracts every component speaks; quality scoring                      |
 | `packages/models`    | model lifetime, grounding, erasure, compositing, **the edit dispatch** |
 | `packages/providers` | remote generation, failover, circuit breaking                          |
+| `packages/planner`   | instruction -> typed plan; rules first, the model for the rest         |
+| `apps/mcp`           | the vision tools over MCP, as a client of the gateway                  |
 | `apps/gateway`       | HTTP surface: health, capabilities, (later) upload and jobs            |
 | `apps/web`           | browser UI: upload, region selection, progress                         |
 | `evals`              | the golden set and its runner                                          |
@@ -169,10 +171,27 @@ than an edit. The plan is applied to the same chips and fields the flow already 
 there is no second way to describe an edit.
 
 Three rules that are load-bearing. The planner depends on `core` alone, so nothing that
-plans has to carry an imaging stack. Which operations exist is *passed in* (`app.OPERATIONS`)
+plans has to carry an imaging stack. Which operations exist is _passed in_ (`app.OPERATIONS`)
 rather than imported, because that is a fact about the models package. And planning keeps a
 ten-second deadline of its own rather than the job's sixty: measured, the same model has
 answered in 2.7 s and in 37.8 s, and past ten the rules-and-ask path is the better answer.
+
+## The tool boundary
+
+`apps/mcp` serves the vision capability as MCP tools, and it is **a client of the gateway,
+not a second copy of it**: every tool is an HTTP call to the same API the web app uses, so
+that process holds no models, no database and no credentials beyond a session token. That
+is what makes "the orchestrator imports no model code" literally true, and it means an
+agent gets the same auth, rate limits and `/ready` degradations a browser does.
+
+Three tools are listed at start-up — `capabilities`, `plan_instruction`, `enable_toolset` —
+and the rest appear only when asked for (`grounding`, `editing`). A manifest of everything
+is tokens an agent pays for on every turn whether or not it edits a picture.
+
+**Results carry references, never pixels.** A candidate comes back as score, box, area and
+an id; the run-length encoding of a 15 MP selection is tens of thousands of integers, and
+an agent that receives one pays for it on every subsequent turn while being no better able
+to act. The A2A mesh this was once part of is cut — see `docs/PLAN.md` §5.
 
 ## Act, judge, decide
 

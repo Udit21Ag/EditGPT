@@ -263,7 +263,7 @@ EditGPT/
 │   ├── web/                     # Next.js 15
 │   └── gateway/                 # FastAPI: auth, upload, jobs, SSE
 ├── apps/worker/                 # Celery: the job lifecycle and the edit step
-├── mcp/                         # FastMCP: vision_tools (planned, Phase 6)
+│   └── mcp/                     # MCP: the vision tools, as a client of the gateway
 │                                # ~~agents/ — the A2A mesh, cut 1 Sep 2026~~
 ├── packages/
 │   ├── core/                    # EditSpec, AssetRef, MaskRef, errors, tracing
@@ -457,6 +457,17 @@ protocol a reader recognises.
 
 **Exit:** the orchestrator reaches perception through the MCP server only; the tier-1 tool
 list stays small and `enable_toolset` reveals the rest.
+
+**Delivered 1 Sep 2026 — `apps/mcp`.** Three tools listed (`capabilities`,
+`plan_instruction`, `enable_toolset`); `grounding` and `editing` appear on request. Every
+tool is an HTTP call to the gateway, so the process holds no models and inherits the auth,
+the rate limits and the degradation reporting a browser gets. Candidates return as score,
+box, area and id — never the mask. Verified against a live gateway: the tool list grows
+from three to five on `enable_toolset('editing')`, and "get rid of the bin in the corner"
+plans to `remove / 'bin in the corner'` through the tool.
+
+**Note on the SDK:** the Python MCP SDK is 2.x, where `FastMCP` became `MCPServer`
+(`mcp.server.mcpserver`). The plan above says FastMCP because it was written before that.
 
 ### Phase 7 — Orchestrator & critic loop (3 days) · **next, and the priority**
 
