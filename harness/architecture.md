@@ -154,6 +154,31 @@ signature a byte at a time. `EDITGPT_URL_SIGNING_KEY` must be set wherever there
 than one process or a restart policy — otherwise each process signs with its own key and
 `/ready` says so.
 
+## Act, judge, decide
+
+Two loops, stacked, and they must not become copies of each other.
+
+**Inside one erase** (`editgpt_models.pipeline`): propose a pass, score it photometrically
+against the same region, keep it or roll it back. It asks _did pass two beat pass one_, and
+`Thresholds.escalate_cost` / `accept_cost` are its decision points.
+
+**Around the whole edit** (`editgpt_models.critic` + `editgpt_core.review`): did the edit do
+what was asked? Three checks — did anything change, does the fill agree with its
+surroundings, and **is the target still detectable in the result**. The last is the only one
+that knows what the user said, and the only one that can tell a beautiful fill of the wrong
+region from a correct edit. It costs a model swap, so `editors._review` pays for it only
+while a retry is still affordable: a check nobody can act on is seven seconds spent to feel
+informed.
+
+The outer loop's one lever is the **selection**, which every pass takes as given — and it is
+only its lever when the _model_ chose the region. A brushed mask is not ours to widen;
+`decide(..., can_widen=...)` is asked rather than inferred for exactly that reason. Out of
+budget returns the best attempt with its verdict attached; out of levers hands the job back
+with what is wrong and what the user can do about it.
+
+`JobState.REVIEW` was a label the pipeline passed through on its way to `DONE`. This is what
+it now describes.
+
 ## What the boundary removes
 
 An upload is scrubbed of metadata before it is stored, in `apps/gateway/src/editgpt_gateway/scrub.py`, and the

@@ -16,8 +16,12 @@ from typing import Any
 
 import numpy as np
 import pytest
-from editgpt_core import AssetRef, EditOp, EditSpec, MaskSource
-from editgpt_core.errors import MaskTooSmallError, ProviderUnavailableError
+from editgpt_core import AssetRef, Constraints, EditOp, EditSpec, MaskSource
+from editgpt_core.errors import (
+    EditRejectedError,
+    MaskTooSmallError,
+    ProviderUnavailableError,
+)
 from editgpt_core.rle import encode as encode_rle
 from editgpt_models.execute import Edit
 from editgpt_worker import editors
@@ -197,6 +201,126 @@ def test_a_small_image_is_left_alone(captured: dict[str, Any]) -> None:
     """Upscaling to the working size would invent detail and then edit the invention."""
     editors.edit(png(64, 48), spec(EditOp.UPSCALE, target=None))
     assert captured["image"].shape[:2] == (48, 64)
+
+
+# ---------------------------------------------------------------- the review loop
+
+
+@pytest.fixture
+def unconvincing(monkeypatch: pytest.MonkeyPatch) -> list[np.ndarray]:
+    """An `execute` that returns the image untouched, and the masks it was handed.
+
+    Untouched is the failure the critic exists to catch and the one that needs no model to
+    stage: Phase 0 shipped exactly this, and every photometric score called it a success.
+    """
+    masks: list[np.ndarray] = []
+
+    def fake_execute(models: Any, op: EditOp, image: np.ndarray, **kwargs: Any) -> Edit:
+        mask = kwargs.get("mask")
+        masks.append(mask.copy() if mask is not None else np.zeros(image.shape[:2], np.uint8))
+        return Edit(
+            image=image.copy(),
+            mask=mask if mask is not None else np.zeros(image.shape[:2], np.uint8),
+            strategy="stub",
+            cost=1.0,
+            seconds=0.1,
+        )
+
+    monkeypatch.setattr(editors, "execute", fake_execute)
+    monkeypatch.setattr(editors, "models_for", lambda _s: object())
+    monkeypatch.setattr(editors, "detector", lambda: None)
+    return masks
+
+
+def grounded_spec(monkeypatch: pytest.MonkeyPatch, mask: np.ndarray) -> EditSpec:
+    """A phrase-grounded region, without running the detector or SAM to get one."""
+    monkeypatch.setattr(
+        editors, "region_for", lambda _s, _i: editors.Region(mask, "detector (0.91)")
+    )
+    return spec(EditOp.REMOVE, target="the car")
+
+
+def test_a_result_that_changed_nothing_is_retried_with_a_wider_selection(
+    unconvincing: list[np.ndarray], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lever the pass policy does not hold: every pass takes the mask as given.
+
+    One retry allowed, so the second verdict stops rather than handing back — which keeps
+    this test about the widening and leaves the hand-back to the next one.
+    """
+    mask = np.zeros((48, 64), np.uint8)
+    mask[10:30, 10:30] = 255
+    asked = grounded_spec(monkeypatch, mask)
+    made = editors.edit(png(), asked.model_copy(update={"constraints": Constraints(max_retries=1)}))
+
+    assert len(unconvincing) == 2, "a failed check did not produce a second attempt"
+    first, second = (int((m > 0).sum()) for m in unconvincing)
+    assert second > first, "the retry did not widen anything"
+    assert [step["action"] for step in made.review] == ["widen", "stop"]
+
+
+def test_a_second_failure_hands_it_back_rather_than_returning_a_bad_edit(
+    unconvincing: list[np.ndarray], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mask = np.zeros((48, 64), np.uint8)
+    mask[10:30, 10:30] = 255
+
+    with pytest.raises(EditRejectedError, match="Brush over the area"):
+        editors.edit(png(), grounded_spec(monkeypatch, mask))
+
+    assert len(unconvincing) == 2, "it should try once more before giving up"
+
+
+def test_a_brushed_selection_is_never_widened(unconvincing: list[np.ndarray]) -> None:
+    """`region_for` refuses to let a model vote on a drawn mask; widening one afterwards
+    would be the same override arriving a step later."""
+    brushed = np.zeros((48, 64), np.uint8)
+    brushed[10:30, 10:30] = 255
+
+    with pytest.raises(EditRejectedError, match="a little more"):
+        editors.edit(png(), spec(mask=brushed))
+
+    assert len(unconvincing) == 1, "a drawn region was edited twice"
+
+
+def test_a_budget_of_no_retries_returns_the_first_attempt_rather_than_failing(
+    unconvincing: list[np.ndarray], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exhaustion is not rejection. The user gets the best attempt and what was wrong
+    with it, which is more useful than nothing at all."""
+    mask = np.zeros((48, 64), np.uint8)
+    mask[10:30, 10:30] = 255
+    asked = grounded_spec(monkeypatch, mask)
+    made = editors.edit(png(), asked.model_copy(update={"constraints": Constraints(max_retries=0)}))
+
+    assert len(unconvincing) == 1
+    assert [step["action"] for step in made.review] == ["stop"]
+    assert made.data, "a stopped job still returns the image it made"
+
+
+def test_the_review_trail_says_what_was_found_and_what_was_decided(
+    unconvincing: list[np.ndarray], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A job that was retried should be able to say so where the user is looking."""
+    mask = np.zeros((48, 64), np.uint8)
+    mask[10:30, 10:30] = 255
+    asked = grounded_spec(monkeypatch, mask)
+    made = editors.edit(png(), asked.model_copy(update={"constraints": Constraints(max_retries=0)}))
+
+    step = made.review[0]
+    assert step["attempt"] == 1
+    assert step["changed"] == 0.0
+    assert "the edit changed almost nothing" in list(step["reasons"])  # type: ignore[call-overload]
+
+
+def test_a_good_result_is_accepted_without_a_second_edit(
+    captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The loop must not cost anything when there is nothing wrong."""
+    made = editors.edit(png(), spec(EditOp.REMOVE, target="the car"))
+
+    assert len(made.review) == 1, "a result with nothing wrong with it was edited twice"
+    assert [step["action"] for step in made.review] == ["accept"]
 
 
 # ---------------------------------------------------------------- model selection

@@ -8,6 +8,7 @@ in `EditSpec` objects — the orchestrator being the case that matters.
 
 from editgpt_core.errors import (
     EditGPTError,
+    EditRejectedError,
     IllegalTransitionError,
     MaskTooSmallError,
     ProviderError,
@@ -16,6 +17,7 @@ from editgpt_core.errors import (
     ValidationError,
 )
 from editgpt_core.jobs import Job, JobState, JobStep, can_transition, check_transition
+from editgpt_core.review import Action, Verdict, decide
 from editgpt_core.spec import (
     AssetRef,
     Constraints,
@@ -28,10 +30,12 @@ from editgpt_core.spec import (
 )
 
 __all__ = [
+    "Action",
     "AssetRef",
     "Constraints",
     "EditGPTError",
     "EditOp",
+    "EditRejectedError",
     "EditSpec",
     "Grounding",
     "IllegalTransitionError",
@@ -46,6 +50,8 @@ __all__ = [
     "ProviderExhaustedError",
     "ProviderUnavailableError",
     "ValidationError",
+    "Verdict",
     "can_transition",
     "check_transition",
+    "decide",
 ]

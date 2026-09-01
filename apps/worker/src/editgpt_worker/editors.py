@@ -23,18 +23,20 @@ from __future__ import annotations
 
 import io
 import logging
+import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from editgpt_core import EditOp, EditSpec, Grounding
-from editgpt_core.errors import MaskTooSmallError, ProviderUnavailableError
+from editgpt_core import Action, EditOp, EditSpec, Grounding, MaskSource, Verdict, decide
+from editgpt_core.errors import EditRejectedError, MaskTooSmallError, ProviderUnavailableError
 from editgpt_core.rle import decode as decode_rle
-from editgpt_models.compositing import RGB, Mask, reproject
+from editgpt_models.compositing import RGB, Mask, grow, reproject
 from editgpt_models.config import load_thresholds
-from editgpt_models.execute import Models, execute
+from editgpt_models.critic import critique
+from editgpt_models.execute import Edit, Models, execute
 from editgpt_models.registry import model_path
 from editgpt_models.segment import Segmentation
 from editgpt_models.slot import ModelSlot
@@ -332,24 +334,89 @@ class Edited:
     content_type: str
     width: int
     height: int
+    review: tuple[dict[str, object], ...] = ()
+    """One entry per attempt: what the critic found and what was decided about it.
+
+    Carried out rather than logged only, because a job that was retried should be able to
+    say so on the page where the user is looking at the result."""
+
+
+VERIFIED_OPS = frozenset({EditOp.REMOVE, EditOp.REPLACE})
+"""Operations whose success a detector can check: the phrase should no longer match.
+
+`ADD` has nothing to look for afterwards, `UPSCALE` and `BACKGROUND` have no phrase, and
+`RESTYLE` and `RETOUCH` have no implementation to check."""
+
+WIDEN_BY = 0.12
+"""How much a retry grows the selection, as a fraction of the object's longest side.
+
+The pipeline's own margin is `dilate_frac` — 5%, applied to whatever it is given. This is
+applied *before* that and compounds with it, which is the point: a poor fill or a surviving
+object usually means the object's boundary spilled outside the mask, and the passes cannot
+see that because every one of them takes the mask as given."""
 
 
 def edit(source: bytes, spec: EditSpec) -> Edited:
-    """Run the job's edit and return the encoded result with its real shape."""
+    """Run the job's edit, check the result, and try once more if the check fails.
+
+    The loop is the whole of the agentic part that touches pixels: act, judge, decide.
+    Judging is `editgpt_models.critic`, deciding is `editgpt_core.review.decide`, and
+    neither is allowed to be a second copy of the pass policy that runs inside a single
+    erase — that one asks whether pass two beat pass one, this one asks whether the edit
+    was the job.
+    """
     check_provider(spec)
     original = decode_image(source)
     image = working_size(original)
     region = region_for(spec, image)
 
-    result = execute(
-        models_for(spec),
-        spec.op,
-        image,
-        mask=region.mask,
-        protect=region.protect,
-        content=spec.content,
-        colour=spec.rgb_colour(GREEN),
-    )
+    started = time.monotonic()
+    attempt = 0
+    # The user's own selection is not ours to grow: `region_for` already refuses to let a
+    # model vote on a brushed mask, and widening one afterwards would be the same
+    # override arriving a step later.
+    can_widen = spec.mask_source is not MaskSource.BRUSH and region.mask is not None
+    review: list[dict[str, object]] = []
+
+    while True:
+        attempt += 1
+        result = execute(
+            models_for(spec),
+            spec.op,
+            image,
+            mask=region.mask,
+            protect=region.protect,
+            content=spec.content,
+            colour=spec.rgb_colour(GREEN),
+        )
+        elapsed = time.monotonic() - started
+        verdict = _review(spec, image, result, attempt=attempt, elapsed=elapsed)
+        action = decide(
+            verdict,
+            attempt=attempt,
+            constraints=spec.constraints,
+            seconds_spent=elapsed,
+            can_widen=can_widen,
+        )
+        review.append(
+            {
+                "attempt": attempt,
+                "action": action.value,
+                "changed": verdict.changed,
+                "fill_cost": verdict.fill_cost,
+                "still_there": verdict.still_there,
+                "reasons": list(verdict.reasons),
+            }
+        )
+        log.info("edit.reviewed", extra=review[-1])
+
+        if action is Action.ACCEPT or action is Action.STOP:
+            break
+        if action is Action.ASK:
+            raise EditRejectedError(f"{'; '.join(verdict.reasons)}. {_advice(spec)}")
+        assert region.mask is not None  # `can_widen` is false without one
+        region = replace(region, mask=grow(region.mask, frac=WIDEN_BY))
+        can_widen = False
 
     # `UPSCALE` produces its own geometry and is deliberately left at the working size;
     # everything else is an edit *of* the upload and is returned at the upload's size.
@@ -364,6 +431,7 @@ def edit(source: bytes, spec: EditSpec) -> Edited:
             "op": spec.op.value,
             "region": region.origin,
             "strategy": result.strategy,
+            "attempts": attempt,
             "cost": result.cost,
             "seconds": result.seconds,
             "megapixels": round(image.shape[0] * image.shape[1] / 1e6, 2),
@@ -376,4 +444,36 @@ def edit(source: bytes, spec: EditSpec) -> Edited:
         content_type=content_type,
         width=int(final.shape[1]),
         height=int(final.shape[0]),
+        review=tuple(review),
+    )
+
+
+def _advice(spec: EditSpec) -> str:
+    """What the user can do about it, which depends on what they gave us."""
+    if spec.mask_source is MaskSource.BRUSH:
+        return "Try a stroke that covers a little more of it, including its edges."
+    return "Brush over the area you want changed — a drawn region is used exactly as drawn."
+
+
+def _review(spec: EditSpec, image: RGB, result: Edit, *, attempt: int, elapsed: float) -> Verdict:
+    """Judge one attempt, paying for the semantic check only when it could be acted on.
+
+    Re-detection costs a model swap — the detector peaks at 1372 MB and this machine holds
+    one model at a time — so it runs only while a retry is still affordable. Learning that
+    an edit failed, seven seconds after the last chance to do anything about it, is a cost
+    with no decision attached to it.
+    """
+    verify = (
+        spec.op in VERIFIED_OPS
+        and spec.mask_source is MaskSource.TEXT
+        and bool(spec.target)
+        and attempt <= spec.constraints.max_retries
+        and elapsed < spec.constraints.max_seconds
+    )
+    return critique(
+        image,
+        result.image,
+        result.mask,
+        target=spec.target,
+        detector=detector() if verify else None,
     )

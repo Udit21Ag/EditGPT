@@ -41,6 +41,15 @@ class ProviderUnavailableError(ProviderError):
     """
 
 
+class EditRejectedError(EditGPTError):
+    """The critic judged a finished edit wrong, and a cheaper path exists for the user.
+
+    Distinct from a failure: everything worked. The system produced an image and then
+    decided not to hand it over, because a drawn region will do in one stroke what another
+    retry would spend thirteen seconds guessing at.
+    """
+
+
 class IllegalTransitionError(EditGPTError):
     """A job state change the lifecycle does not permit.
 

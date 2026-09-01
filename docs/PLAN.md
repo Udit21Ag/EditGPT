@@ -485,6 +485,22 @@ rather than a confident wrong edit.
 N* — plus the cost and latency the loop added. A critic that cannot be shown to fix
 something is decoration.
 
+**Delivered 1 Sep 2026.** The planner: rules answer in **0.007 ms median** over 1200 calls
+against **2.7 s / 5.3 s / 37.8 s** for three live model calls, and the model is constrained
+by a schema derived from `Intent` rather than asked for JSON. That 37.8 s is why planning
+keeps its own ten-second deadline rather than the job's sixty.
+
+The critic: three checks — did anything change, does the fill agree with its surroundings,
+**is the target still detectable in the result** — and four actions, `accept · widen · ask ·
+stop`. The semantic check is the one no photometric score can make, and it is paid for only
+while a retry is still affordable. The outer loop's single lever is the selection, which
+every pass takes as given, and it is only a lever when the *model* chose the region: an
+existing test caught the first version letting the detector second-guess a hand-drawn mask.
+
+**Exit not yet met:** the k-of-N number needs one run with real weights. The loop itself is
+verified end to end against staged failures, and mutation-checked — forcing `can_widen` to
+false fails two tests.
+
 ### Phase 8 — Frontend (7–9 days) · **in progress**
 
 Landing · Clerk auth · upload (drag/drop, paste, camera on mobile) · **canvas editor**: pan/zoom, brush/eraser with

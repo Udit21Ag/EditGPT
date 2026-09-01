@@ -55,6 +55,12 @@ class Produced:
     content_type: str
     width: int
     height: int
+    review: tuple[dict[str, object], ...] = ()
+    """What the critic found on each attempt, and what was decided about it.
+
+    Empty for editors that do not review — `noop` has nothing to judge. Carried through so
+    the job can say "checked, retried once, accepted" on the page where the user is
+    looking at the result, rather than only in a log nobody reading it will open."""
 
 
 Editor = Callable[[bytes, EditSpec], Produced]
@@ -91,6 +97,7 @@ def _real_editor(source: bytes, spec: EditSpec) -> Produced:
         content_type=made.content_type,
         width=made.width,
         height=made.height,
+        review=made.review,
     )
 
 
@@ -328,7 +335,12 @@ def _run_job(job_id: str, *, editor: str, user_id: str) -> dict[str, object]:
         made = EDITORS[editor](source, job.spec)
 
         job = _advance(
-            res, job, JobState.REVIEW, owner=owner, progress=0.8, detail="checking the result"
+            res,
+            job,
+            JobState.REVIEW,
+            owner=owner,
+            progress=0.8,
+            detail=_reviewed(made),
         )
         digest = res.assets.put(made.data, content_type=made.content_type)
         _record_outputs(res, job, digest, editor=editor, made=made, owner=owner)
@@ -365,6 +377,24 @@ def _run_job(job_id: str, *, editor: str, user_id: str) -> dict[str, object]:
             res.jobs.save(failed, user_id=owner)
             _announce(res, failed, detail=reason)
         return {"job_id": job_id, "state": JobState.FAILED.value, "error": reason}
+
+
+def _reviewed(made: Produced) -> str:
+    """What to show for the review step, in the words a person would use.
+
+    `JobState.REVIEW` existed before there was anything behind it — a label the pipeline
+    passed through on its way to `DONE`. The critic is what it now describes, and the step
+    timeline is where a user sees that the system checked its own work.
+    """
+    if not made.review:
+        return "checking the result"
+    retries = sum(1 for step in made.review if step.get("action") == "widen")
+    outcome = str(made.review[-1].get("action", ""))
+    if retries and outcome == "accept":
+        return f"checked, widened the selection {retries}x, and accepted the result"
+    if outcome == "stop":
+        return "checked; out of budget, returning the best attempt"
+    return "checked the result"
 
 
 def _reason(error: BaseException) -> str:
