@@ -7,7 +7,7 @@ dependencies = [
     # Extras are named explicitly: `uv sync --all-extras` applies to this project's own
     # extras, not to a workspace member's, so `editgpt-models` alone leaves out CLIPSeg.
     "editgpt-core[metrics]",
-    "editgpt-models[text]",
+    "editgpt-models",
     "editgpt-planner",
     "editgpt-providers",
     "editgpt-store[s3]",
@@ -17,7 +17,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-bench = ["datasets>=3.0", "scikit-image>=0.24"]
+# `editgpt-models[text]` is here rather than in the default dependencies because CLIPSeg
+# is the *replaced* grounding path (ADR-0002) and the only thing left in this repository
+# that needs torch. It is still built and still measured — `make bench-grounding-clipseg`
+# is where ADR-0002's numbers come from, and `evals/run.py` falls back to it — but nothing
+# on the shipping path loads it, and torch is 502 MB of the 1.4 GB environment. Declaring
+# it where it is actually used is what keeps a worker image from carrying it.
+bench = ["editgpt-models[text]", "datasets>=3.0", "scikit-image>=0.24"]
 
 [dependency-groups]
 dev = [

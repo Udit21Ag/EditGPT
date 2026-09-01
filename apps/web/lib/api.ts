@@ -246,21 +246,6 @@ export async function getJob(getToken: GetToken, id: string): Promise<Job> {
   return response.ok ? response.json() : decode(response);
 }
 
-export async function cancelJob(getToken: GetToken, id: string): Promise<Job> {
-  const response = await fetch(
-    `${GATEWAY_URL}/v1/jobs/${id}/cancel`,
-    await authorized(getToken, { method: "POST" }),
-  );
-  return response.ok ? response.json() : decode(response);
-}
-
-/**
- * Follow a job's progress.
- *
- * `EventSource` cannot carry an `Authorization` header, so this reads the SSE body off a
- * `fetch` stream and parses the frames. Returns a cancel function; call it when the
- * component unmounts or the connection outlives the job.
- */
 export function streamJob(
   getToken: GetToken,
   id: string,

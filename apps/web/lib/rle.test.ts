@@ -9,7 +9,6 @@
 import { describe, expect, it } from "vitest";
 import fixtures from "./rle-fixtures.json";
 import {
-  areaPx,
   decodeMask,
   encodeMask,
   maskBounds,
@@ -59,15 +58,6 @@ describe("decodeMask", () => {
   it("handles a mask that is set everywhere", () => {
     const { rle } = cases.full!;
     expect(Array.from(decodeMask(rle)).every((v) => v === 1)).toBe(true);
-  });
-});
-
-describe("areaPx", () => {
-  it("agrees with a full decode without doing one", () => {
-    for (const fixture of Object.values(cases)) {
-      const counted = Array.from(decodeMask(fixture.rle)).reduce((a, b) => a + b, 0);
-      expect(areaPx(fixture.rle)).toBe(counted);
-    }
   });
 });
 

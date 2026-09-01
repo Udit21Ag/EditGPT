@@ -17,13 +17,6 @@ export interface MaskPayload {
   readonly counts: readonly number[];
 }
 
-/** Set pixels, without decoding. The encoding opens with zeros, so odd runs are ones. */
-export function areaPx(mask: MaskPayload): number {
-  let total = 0;
-  for (let i = 1; i < mask.counts.length; i += 2) total += mask.counts[i]!;
-  return total;
-}
-
 /**
  * A row-major `Uint8Array` of 0 and 1, `width * height` long.
  *

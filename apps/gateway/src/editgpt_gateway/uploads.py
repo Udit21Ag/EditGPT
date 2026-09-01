@@ -29,8 +29,6 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from editgpt_core import AssetRef
-
 from editgpt_gateway.scrub import scrub
 
 log = logging.getLogger(__name__)
@@ -156,14 +154,4 @@ def inspect(data: bytes, *, max_megapixels: float) -> Upload:
         width=width,
         height=height,
         content_type=ALLOWED_FORMATS[image_format],
-    )
-
-
-def to_ref(upload: Upload, *, bucket: str, digest: str) -> AssetRef:
-    return AssetRef(
-        bucket=bucket,
-        sha256=digest,
-        width=upload.width,
-        height=upload.height,
-        content_type=upload.content_type,
     )
