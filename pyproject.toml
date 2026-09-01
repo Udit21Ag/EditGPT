@@ -8,6 +8,7 @@ dependencies = [
     # extras, not to a workspace member's, so `editgpt-models` alone leaves out CLIPSeg.
     "editgpt-core[metrics]",
     "editgpt-models[text]",
+    "editgpt-planner",
     "editgpt-providers",
     "editgpt-store[s3]",
     "editgpt-gateway[clerk]",
@@ -41,6 +42,7 @@ members = ["packages/*", "apps/gateway", "apps/worker"]
 [tool.uv.sources]
 editgpt-core = { workspace = true }
 editgpt-models = { workspace = true }
+editgpt-planner = { workspace = true }
 editgpt-providers = { workspace = true }
 editgpt-store = { workspace = true }
 editgpt-gateway = { workspace = true }
@@ -75,8 +77,8 @@ plugins = []
 # named `editgpt_core.spec` rather than `packages.core.src.editgpt_core.spec`, while a
 # test file falls back to a path-derived name and stops colliding.
 explicit_package_bases = true
-mypy_path = """packages/core/src:packages/models/src:packages/providers/src:\
-packages/store/src:apps/gateway/src:apps/worker/src"""
+mypy_path = """packages/core/src:packages/models/src:packages/planner/src:\
+packages/providers/src:packages/store/src:apps/gateway/src:apps/worker/src"""
 
 [[tool.mypy.overrides]]
 # Vision and runtime libraries either ship no stubs or ship stale ones. We type our own

@@ -19,6 +19,7 @@ members = [
     "editgpt-core",
     "editgpt-gateway",
     "editgpt-models",
+    "editgpt-planner",
     "editgpt-providers",
     "editgpt-store",
     "editgpt-worker",
@@ -963,6 +964,7 @@ dependencies = [
     { name = "editgpt-core", extra = ["metrics"] },
     { name = "editgpt-gateway", extra = ["clerk"] },
     { name = "editgpt-models", extra = ["text"] },
+    { name = "editgpt-planner" },
     { name = "editgpt-providers" },
     { name = "editgpt-store", extra = ["s3"] },
     { name = "editgpt-worker" },
@@ -998,6 +1000,7 @@ requires-dist = [
     { name = "editgpt-core", extras = ["metrics"], editable = "packages/core" },
     { name = "editgpt-gateway", extras = ["clerk"], editable = "apps/gateway" },
     { name = "editgpt-models", extras = ["text"], editable = "packages/models" },
+    { name = "editgpt-planner", editable = "packages/planner" },
     { name = "editgpt-providers", editable = "packages/providers" },
     { name = "editgpt-store", extras = ["s3"], editable = "packages/store" },
     { name = "editgpt-worker", editable = "apps/worker" },
@@ -1118,6 +1121,21 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'text'", specifier = ">=4.45" },
 ]
 provides-extras = ["text"]
+
+[[package]]
+name = "editgpt-planner"
+version = "0.1.0"
+source = { editable = "packages/planner" }
+dependencies = [
+    { name = "editgpt-core" },
+    { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "editgpt-core", editable = "packages/core" },
+    { name = "httpx", specifier = ">=0.27" },
+]
 
 [[package]]
 name = "editgpt-providers"
