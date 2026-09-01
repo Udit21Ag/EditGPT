@@ -384,3 +384,56 @@ def test_a_finished_job_carries_a_link_to_its_result(
     view = client.get(f"/v1/jobs/{created['id']}").json()
     assert view["result_sha256"] == digest
     assert view["result_url"], "a result with no link is a result the client cannot show"
+
+
+# ---------------------------------------------------------------- planning
+
+
+def test_a_plain_instruction_is_planned_without_a_model(client: TestClient) -> None:
+    """The fast-path claim, checkable from outside: no key is configured in tests, and
+    "remove the car" still comes back as a plan rather than a question."""
+    response = client.post("/v1/plan", json={"instruction": "remove the car"})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["route"] == "rule"
+    assert body["op"] == "remove"
+    assert body["target"] == "car"
+    assert body["tokens"] == 0, "a rule answer must not have cost anything"
+
+
+def test_an_instruction_nobody_can_act_on_comes_back_as_a_question(client: TestClient) -> None:
+    response = client.post("/v1/plan", json={"instruction": "make it nicer"})
+
+    body = response.json()
+    assert body["route"] == "ask"
+    assert body["question"]
+    assert body["op"] is None
+
+
+def test_an_operation_with_no_implementation_is_refused_here_not_in_a_worker(
+    client: TestClient,
+) -> None:
+    """`/capabilities` and the planner read the same tuple, so what the API advertises and
+    what it will plan cannot drift apart."""
+    advertised = set(client.get("/capabilities").json()["operations"])
+    response = client.post("/v1/plan", json={"instruction": "retouch the skin"})
+
+    assert "retouch" not in advertised
+    assert response.json()["route"] == "ask"
+
+
+def test_a_page_of_text_is_refused_before_it_reaches_a_metered_model(
+    client: TestClient,
+) -> None:
+    """A planner prompt is one instruction. Thirty calls in ninety seconds exhausted a
+    day's free-tier quota during a benchmark run; an uncapped body is the same failure
+    in a single request."""
+    response = client.post("/v1/plan", json={"instruction": "remove the car " * 200})
+    assert response.status_code == 422
+
+
+def test_planning_is_rate_limited_like_the_endpoints_that_cost_something(
+    settings: Settings,
+) -> None:
+    assert "/v1/plan" in settings.rate_limit_burst_paths

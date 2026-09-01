@@ -50,6 +50,7 @@ const EXPLICABLE = [
   "jobs are in memory and will not survive a restart",
   "image links are signed with a per-process key: set EDITGPT_URL_SIGNING_KEY",
   "cors still allows localhost: set EDITGPT_CORS_ORIGINS",
+  "no planner model: an instruction must name the operation plainly (set GEMINI_API_KEY)",
 ];
 
 // Adding a line here is meant to be a deliberate act. The list caught its own first new

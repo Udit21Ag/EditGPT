@@ -130,6 +130,11 @@ class Services:
             problems.append("no queue: jobs are accepted but never executed")
         if not self.settings.uses_clerk:
             problems.append("no authentication: every request acts as the shared account")
+        if not self.settings.uses_planner_model:
+            problems.append(
+                "no planner model: an instruction must name the operation plainly "
+                "(set GEMINI_API_KEY)"
+            )
         if not self.settings.url_signing_key:
             problems.append(
                 "image links are signed with a per-process key: set EDITGPT_URL_SIGNING_KEY"

@@ -5,6 +5,10 @@ description = "HTTP gateway: upload, job intake, progress streaming"
 requires-python = ">=3.12"
 dependencies = [
     "editgpt-core",
+    # The planner is contracts and regexes with one HTTP call behind it — no imaging
+    # stack, no models. Architectural invariant 3 forbids the *worker's* dependencies
+    # here; this is not one of them.
+    "editgpt-planner",
     "editgpt-store",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",

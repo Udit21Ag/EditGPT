@@ -497,6 +497,14 @@ while a retry is still affordable. The outer loop's single lever is the selectio
 every pass takes as given, and it is only a lever when the *model* chose the region: an
 existing test caught the first version letting the detector second-guess a hand-drawn mask.
 
+**Wired and measured, 1 Sep 2026.** `POST /v1/plan` and an instruction box in the editor:
+a sentence fills the chips and fields the flow already reads, and the page says *who*
+answered — "matched a rule, no model was asked" is the fast-path claim made checkable by
+the person using it. `benchmarks/planner.py` scores 55 labelled instructions across two
+splits and found four rule defects in its first run; rule accuracy went 0.840 → 1.000, and
+the run then exhausted the free tier's quota and scored eight unreachable rows as failures,
+which is now excluded rather than counted.
+
 **Exit not yet met:** the k-of-N number needs one run with real weights. The loop itself is
 verified end to end against staged failures, and mutation-checked — forcing `can_widen` to
 false fails two tests.

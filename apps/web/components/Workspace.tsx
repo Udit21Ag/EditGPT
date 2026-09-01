@@ -27,10 +27,12 @@ import {
   getJob,
   groundPhrase,
   groundPoints,
+  planInstruction,
   streamJob,
   uploadImage,
   type Candidate,
   type MaskPayload,
+  type PlanView,
   type PointPrompt,
   type UploadedImage,
 } from "@/lib/api";
@@ -51,6 +53,7 @@ import { BeforeAfter } from "./BeforeAfter";
 import { BrushCanvas } from "./BrushCanvas";
 import { CandidatePicker, REJECTED } from "./CandidatePicker";
 import { ImageDrop } from "./ImageDrop";
+import { InstructionBar } from "./InstructionBar";
 import { MaskPreview } from "./MaskPreview";
 import { StepTimeline, type Step } from "./StepTimeline";
 import { VersionStrip } from "./VersionStrip";
@@ -81,6 +84,9 @@ export function Workspace({ getToken }: { getToken: GetToken }) {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
 
   const [op, setOp] = useState<Operation>("remove");
+  const [instruction, setInstruction] = useState("");
+  const [plan, setPlan] = useState<PlanView | null>(null);
+  const [planning, setPlanning] = useState(false);
   const [target, setTarget] = useState("");
   const [content, setContent] = useState("");
   const [colour, setColour] = useState("#2ea043");
@@ -242,6 +248,40 @@ export function Workspace({ getToken }: { getToken: GetToken }) {
   }
 
   /**
+   * Read the sentence, and fill the form with what it says.
+   *
+   * The plan is *applied*, not merely displayed: the chips and fields are the same state
+   * the rest of the flow already reads, so an instruction becomes an ordinary edit that
+   * the user can correct. Anything else would be a second way to say the same thing.
+   *
+   * A region already chosen belongs to the previous instruction, so it goes — the same
+   * rule that applies when an operation chip is clicked.
+   */
+  async function interpret() {
+    const text = instruction.trim();
+    if (text.length === 0) return;
+    setPlanning(true);
+    setError(null);
+    try {
+      const made = await planInstruction(getToken, text, drawing || chosenMask !== null);
+      setPlan(made);
+      if (made.op === null) return;
+      setOp(made.op as Operation);
+      setTarget(made.target ?? "");
+      setContent(made.content ?? "");
+      if (made.colour !== null) setColour(made.colour);
+      forgetRegion();
+      setStrokes(EMPTY_HISTORY);
+      setTaps([]);
+      setTapMask(null);
+    } catch (cause) {
+      reportError(cause);
+    } finally {
+      setPlanning(false);
+    }
+  }
+
+  /**
    * Resolve a tap, with every tap so far.
    *
    * SAM takes the whole prompt each time rather than refining incrementally, so the
@@ -393,6 +433,15 @@ export function Workspace({ getToken }: { getToken: GetToken }) {
 
       {image !== null ? (
         <section className="flex flex-col gap-3">
+          <InstructionBar
+            value={instruction}
+            onChange={setInstruction}
+            onInterpret={() => void interpret()}
+            plan={plan}
+            busy={planning}
+            disabled={busy}
+          />
+
           <div className="flex flex-wrap gap-2" role="group" aria-label="What to do">
             {OPERATIONS.map((choice) => (
               <button

@@ -179,6 +179,40 @@ export async function uploadImage(getToken: GetToken, file: File): Promise<Uploa
   return response.ok ? response.json() : decode(response);
 }
 
+export interface PlanView {
+  /** Who answered: `rule`, `model`, or `ask`. */
+  route: "rule" | "model" | "ask";
+  op: string | null;
+  target: string | null;
+  content: string | null;
+  colour: string | null;
+  question: string | null;
+  seconds: number;
+  tokens: number;
+}
+
+/**
+ * Turn a sentence into an operation, or into a question.
+ *
+ * Separate from creating the job so the user sees what was understood before anything is
+ * spent — "I meant the other car" should cost a correction, not an edit.
+ */
+export async function planInstruction(
+  getToken: GetToken,
+  instruction: string,
+  hasMask = false,
+): Promise<PlanView> {
+  const response = await fetch(
+    `${GATEWAY_URL}/v1/plan`,
+    await authorized(getToken, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ instruction, has_mask: hasMask }),
+    }),
+  );
+  return response.ok ? response.json() : decode(response);
+}
+
 export interface CreateJob {
   op: string;
   image_sha256: string;

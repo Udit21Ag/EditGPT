@@ -154,6 +154,26 @@ signature a byte at a time. `EDITGPT_URL_SIGNING_KEY` must be set wherever there
 than one process or a restart policy — otherwise each process signs with its own key and
 `/ready` says so.
 
+## Reading the instruction
+
+`POST /v1/plan` turns a sentence into an operation, or into a question. Rules first,
+`editgpt_planner.rules`; the model — Gemini Flash, constrained to a schema derived from
+`Intent` — sees only what they decline. Measured over 55 labelled instructions: rules
+answer **45% at 0.007 ms and 1.000 accuracy**, the model answers the rest at 4.36 s median
+and 201 tokens, and refusals are 1.000. `benchmarks/planner.py` is where those numbers come
+from and where they are re-checked.
+
+Planning is a **separate endpoint from job creation** on purpose: the client shows what was
+understood before anything is spent, so "I meant the other car" costs a correction rather
+than an edit. The plan is applied to the same chips and fields the flow already reads —
+there is no second way to describe an edit.
+
+Three rules that are load-bearing. The planner depends on `core` alone, so nothing that
+plans has to carry an imaging stack. Which operations exist is *passed in* (`app.OPERATIONS`)
+rather than imported, because that is a fact about the models package. And planning keeps a
+ten-second deadline of its own rather than the job's sixty: measured, the same model has
+answered in 2.7 s and in 37.8 s, and past ten the rules-and-ask path is the better answer.
+
 ## Act, judge, decide
 
 Two loops, stacked, and they must not become copies of each other.

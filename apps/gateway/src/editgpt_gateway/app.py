@@ -31,11 +31,13 @@ from editgpt_core import (
 )
 from editgpt_core.logs import bound
 from editgpt_core.logs import configure as configure_logs
+from editgpt_planner import Gemini
+from editgpt_planner import planner as planner
 from editgpt_store import AssetNotFoundError, ProgressEvent, last_event, record_image, subscribe
 from fastapi import FastAPI, Header, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlalchemy.orm import Session, sessionmaker
 
 from editgpt_gateway import auth, limits, signing, uploads
@@ -72,6 +74,21 @@ class Readiness(Health):
     jobs: str
     auth: dict[str, Any]
     degraded: list[str]
+
+
+OPERATIONS: tuple[EditOp, ...] = (
+    EditOp.REMOVE,
+    EditOp.ADD,
+    EditOp.REPLACE,
+    EditOp.BACKGROUND,
+    EditOp.UPSCALE,
+)
+"""What this deployment can run, in the order a person would try them.
+
+One tuple, read by `/capabilities` and by the planner: an instruction for an operation
+with no implementation is answered as a sentence here rather than accepted and failed
+inside a worker three steps later. `editgpt_models.execute.SUPPORTED` is the truth and
+`test_capabilities_advertises_only_supported_operations` is what keeps the two equal."""
 
 
 class Capabilities(BaseModel):
@@ -165,6 +182,38 @@ class MaskPayload(BaseModel):
     counts: list[int]
 
 
+class PlanRequest(BaseModel):
+    """A sentence, and whether the user has already drawn a region."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    instruction: str = Field(min_length=1, max_length=500)
+    """Capped: a planner prompt is one instruction, and a page of text is either a mistake
+    or an attempt to spend the day's quota in a single request."""
+
+    has_mask: bool = False
+    """Whether a region is already selected. It changes what the plan needs from the
+    sentence — with a mask drawn, "remove this" is complete."""
+
+
+class PlanView(BaseModel):
+    """What was understood, and who understood it.
+
+    The route is on the wire deliberately. A user should be able to see that "remove the
+    car" was answered by a rule in a tenth of a millisecond and never left the machine,
+    and the same field is what makes the fast-path claim checkable rather than asserted.
+    """
+
+    route: str
+    op: EditOp | None = None
+    target: str | None = None
+    content: str | None = None
+    colour: str | None = None
+    question: str | None = None
+    seconds: float = 0.0
+    tokens: int = 0
+
+
 class JobRequest(BaseModel):
     """What a client asks for. Translated into an `EditSpec`, which does the validating."""
 
@@ -240,6 +289,9 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     configure_logs(service="gateway")
     app = FastAPI(title="EditGPT gateway", version=API_VERSION)
     app.state.services = services or build_services(config)
+    # Built once: the key is read at construction, and a per-request client would re-read
+    # the environment on every instruction for no benefit.
+    completer = Gemini(api_key=config.gemini_api_key) if config.uses_planner_model else None
 
     @app.middleware("http")
     async def _correlate(request: Request, call_next: Any) -> Response:
@@ -294,13 +346,7 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
     @app.get("/capabilities", response_model=Capabilities)
     def capabilities() -> Capabilities:
         return Capabilities(
-            operations=[
-                EditOp.REMOVE,
-                EditOp.ADD,
-                EditOp.REPLACE,
-                EditOp.BACKGROUND,
-                EditOp.UPSCALE,
-            ],
+            operations=list(OPERATIONS),
             unsupported={
                 EditOp.RESTYLE: "no free instruction-editing model exists",
                 EditOp.RETOUCH: "not scoped for v1",
@@ -379,6 +425,40 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
             return view
         url, _ = link_for(job.result_sha256)
         return view.model_copy(update={"result_url": url})
+
+    @app.post("/v1/plan", response_model=PlanView)
+    def plan_instruction(body: PlanRequest, principal: PrincipalDep) -> PlanView:
+        """Turn one instruction into an operation, or into a question.
+
+        Separate from job creation on purpose: the client shows what was understood before
+        anything is spent, and a job is still created from a typed request. An endpoint
+        that planned *and* ran would make "I meant the other car" cost an edit.
+        """
+        del principal  # the dependency is the check; the value is not needed
+        made = planner.plan(
+            body.instruction,
+            available=OPERATIONS,
+            completer=completer,
+        )
+        log.info(
+            "plan.made",
+            extra={
+                "route": made.route.value,
+                "op": made.intent.op.value if made.intent else None,
+                "seconds": made.seconds,
+                "tokens": made.prompt_tokens + made.output_tokens,
+            },
+        )
+        return PlanView(
+            route=made.route.value,
+            op=made.intent.op if made.intent else None,
+            target=made.intent.target if made.intent else None,
+            content=made.intent.content if made.intent else None,
+            colour=made.intent.colour if made.intent else None,
+            question=made.question,
+            seconds=made.seconds,
+            tokens=made.prompt_tokens + made.output_tokens,
+        )
 
     @app.get("/v1/images/{digest}")
     def download_image(

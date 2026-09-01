@@ -111,6 +111,32 @@ function serve(over: Partial<Server> = {}) {
         margin: server.ambiguous ? 0.05 : 1,
       });
     }
+    if (path === "/v1/plan" && init?.method === "POST") {
+      const said = String((parsed as { instruction?: string })?.instruction ?? "");
+      return json(
+        said.startsWith("remove")
+          ? {
+              route: "rule",
+              op: "remove",
+              target: "car on the left",
+              content: null,
+              colour: null,
+              question: null,
+              seconds: 0.0001,
+              tokens: 0,
+            }
+          : {
+              route: "ask",
+              op: null,
+              target: null,
+              content: null,
+              colour: null,
+              question: "I could not tell which edit that asks for.",
+              seconds: 0.2,
+              tokens: 180,
+            },
+      );
+    }
     if (path === "/v1/jobs" && init?.method === "POST") {
       return json(
         {
@@ -329,5 +355,42 @@ describe("when the gateway cannot be reached", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toMatch(/could not reach the gateway/i);
     expect(alert.textContent).toContain("gateway.test");
+  });
+});
+
+describe("planning", () => {
+  it("fills the form from a sentence, and says a rule answered it", async () => {
+    serve();
+    await upload();
+
+    fireEvent.change(screen.getByLabelText("What would you like to change?"), {
+      target: { value: "remove the car on the left" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Interpret" }));
+
+    // The plan is applied to the same state the rest of the flow reads, so an instruction
+    // becomes an ordinary edit the user can still correct.
+    await waitFor(() => {
+      expect((screen.getByLabelText("What to change") as HTMLInputElement).value).toBe(
+        "car on the left",
+      );
+    });
+    expect(screen.getByRole("button", { name: "Remove" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(screen.getByRole("status").textContent).toContain("no model was asked");
+  });
+
+  it("asks rather than guessing when the sentence names no edit", async () => {
+    serve();
+    await upload();
+
+    fireEvent.change(screen.getByLabelText("What would you like to change?"), {
+      target: { value: "make it nicer" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Interpret" }));
+
+    await screen.findByText(/could not tell which edit/i);
+    expect((screen.getByLabelText("What to change") as HTMLInputElement).value).toBe("");
   });
 });

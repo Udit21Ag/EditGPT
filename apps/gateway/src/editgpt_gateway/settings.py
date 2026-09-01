@@ -162,9 +162,30 @@ class Settings(BaseSettings):
     would be smoother at the boundary and is not worth a Lua script here.
     """
 
-    rate_limit_burst_paths: tuple[str, ...] = ("/v1/images", "/v1/jobs")
+    gemini_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("EDITGPT_GEMINI_API_KEY", "GEMINI_API_KEY"),
+    )
+    """Google AI Studio's free text tier, for the planner.
+
+    Unprefixed as well as prefixed, for the same reason the Clerk keys are: the benchmark
+    and the gateway read the same account, and a secret living in two variables is a
+    secret somebody will rotate in one of them.
+
+    Empty is a working configuration, not a broken one. The rules answer most instructions
+    without it and the rest become a question; `/ready` says so."""
+
+    @property
+    def uses_planner_model(self) -> bool:
+        return bool(self.gemini_api_key)
+
+    rate_limit_burst_paths: tuple[str, ...] = ("/v1/images", "/v1/jobs", "/v1/plan")
     """Only the endpoints that cost something. Reading a job's state is free and a client
-    polling it is a client we would rather have on the SSE stream anyway."""
+    polling it is a client we would rather have on the SSE stream anyway.
+
+    `/v1/plan` is here because it can reach a model on a metered free tier — thirty calls
+    in ninety seconds exhausted the day's quota during a benchmark run, which is exactly
+    what an unthrottled endpoint would do to a demo."""
 
     @property
     def uses_clerk(self) -> bool:

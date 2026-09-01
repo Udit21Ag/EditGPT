@@ -1053,6 +1053,7 @@ source = { editable = "apps/gateway" }
 dependencies = [
     { name = "celery" },
     { name = "editgpt-core" },
+    { name = "editgpt-planner" },
     { name = "editgpt-store" },
     { name = "fastapi" },
     { name = "pillow" },
@@ -1075,6 +1076,7 @@ requires-dist = [
     { name = "celery", specifier = ">=5.4" },
     { name = "clerk-backend-api", marker = "extra == 'clerk'", specifier = ">=7.0" },
     { name = "editgpt-core", editable = "packages/core" },
+    { name = "editgpt-planner", editable = "packages/planner" },
     { name = "editgpt-store", editable = "packages/store" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", marker = "extra == 'test'", specifier = ">=0.27" },
