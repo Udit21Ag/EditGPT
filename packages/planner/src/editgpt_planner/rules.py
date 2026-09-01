@@ -20,6 +20,7 @@ import re
 from collections.abc import Iterator
 
 from editgpt_core import EditOp
+
 from editgpt_planner.intent import Intent
 
 COLOURS = {
@@ -50,13 +51,30 @@ _ARTICLE = r"(?:the |a |an |my |this )?"
 
 
 def _clean(text: str) -> str:
-    """Trim the politeness and punctuation that carry no meaning for the parse."""
+    """Trim the politeness and punctuation that carry no meaning for the parse.
+
+    Both ends. "change the background to teal please" put the politeness *inside* the
+    captured colour and produced no colour at all — found by `benchmarks.planner`, not by
+    the thirty unit tests that came before it.
+    """
     text = text.strip().strip(".!?").strip()
     text = re.sub(
-        r"^(?:please|can you|could you|i want you to|i'd like you to)\s+", "", text, flags=re.I
+        r"^(?:please|can you|could you|would you|i want you to|i'd like you to)\s+",
+        "",
+        text,
+        flags=re.I,
     )
-    text = re.sub(r"^(?:please\s+)", "", text, flags=re.I)
+    text = re.sub(r"[,\s]+(?:please|thanks|thank you|for me)$", "", text, flags=re.I)
     return re.sub(r"\s+", " ", text).strip()
+
+
+VAGUE = re.compile(r"^(?:whatever|something|anything|stuff|it|that thing|the thing)\b", re.I)
+"""Subjects that name nothing a detector could ground.
+
+"erase whatever that grey box is at the bottom" matched the removal shape and carried the
+filler into the phrase. A rule answering with `whatever that grey box is` has not
+understood the sentence, it has matched a verb. These go to the model, which is what the
+model is for."""
 
 
 def _subject(text: str) -> str:
@@ -72,8 +90,24 @@ def _subject(text: str) -> str:
 
 
 def _replace(text: str) -> Intent | None:
+    # "put a modern sofa where the armchair is" is a replacement wearing an addition's
+    # verb. Without this it matched `_add` and quietly dropped the armchair.
+    where = re.match(
+        rf"^(?:put|place|add)\s+(.+?)\s+where\s+{_ARTICLE}(.+?)(?:\s+(?:is|was|used to be))?$",
+        text,
+        re.I,
+    )
+    if where:
+        return Intent(
+            op=EditOp.REPLACE,
+            target=_subject(where.group(2)),
+            content=where.group(1).strip(),
+        )
+
     match = re.match(
-        rf"^(?:replace|swap|change)\s+{_ARTICLE}(.+?)\s+(?:with|for|into)\s+(.+)$", text, re.I
+        rf"^(?:replace|swap(?:\s+out)?|change|turn)\s+{_ARTICLE}(.+?)\s+(?:with|for|into)\s+(.+)$",
+        text,
+        re.I,
     )
     if not match:
         return None
@@ -104,7 +138,7 @@ def _remove(text: str) -> Intent | None:
     match = re.match(
         rf"^(?:remove|erase|delete|get rid of|take out|clean up)\s+{_ARTICLE}(.+)$", text, re.I
     )
-    if not match:
+    if not match or VAGUE.match(match.group(1)):
         return None
     return Intent(op=EditOp.REMOVE, target=_subject(match.group(1)))
 
@@ -113,7 +147,7 @@ def _add(text: str) -> Intent | None:
     match = re.match(
         rf"^(?:add|put|place|insert|give (?:him|her|them|it))\s+{_ARTICLE}(.+)$", text, re.I
     )
-    if not match:
+    if not match or VAGUE.match(match.group(1)):
         return None
     return Intent(op=EditOp.ADD, content=_subject(match.group(1)))
 

@@ -42,12 +42,17 @@ def test_the_provider_accepts_the_converted_schema() -> None:
         "get that ugly thing on the right out of the picture",
         available=IMPLEMENTED,
         completer=Gemini(api_key=api_key()),
+        # Generous on purpose. In production this call is cut off at ten seconds and the
+        # user gets a question instead — measured, the same model has answered in 2.7 s
+        # and in 37.8 s. This test is about the schema being accepted, not the deadline.
+        timeout_s=60.0,
     )
 
     assert made.route is Route.MODEL
     assert made.intent is not None
     assert made.intent.op is EditOp.REMOVE
     assert made.intent.target, "the model must copy the user's phrase, not invent one"
+    assert made.prompt_tokens > 0, "the call cost something and the plan should say what"
 
 
 def test_an_instruction_the_rules_answer_costs_nothing_even_with_a_model_present() -> None:

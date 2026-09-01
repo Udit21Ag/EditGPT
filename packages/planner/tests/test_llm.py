@@ -12,7 +12,7 @@ import json
 import httpx
 import pytest
 import respx
-from editgpt_core.errors import ProviderError
+from editgpt_core.errors import ProviderError, ProviderExhaustedError
 from editgpt_planner import Gemini, Intent, response_schema
 from editgpt_planner.llm import ENDPOINT
 
@@ -65,12 +65,30 @@ def test_the_request_asks_for_json_against_the_schema_at_temperature_zero() -> N
         "make it bigger", schema=response_schema(Intent), timeout_s=10
     )
 
-    assert answer == '{"op": "upscale"}'
+    assert answer.text == '{"op": "upscale"}'
     body = json.loads(route.calls[0].request.content)
     assert body["generationConfig"]["responseMimeType"] == "application/json"
     assert body["generationConfig"]["temperature"] == 0.0
     assert body["generationConfig"]["responseSchema"]["properties"]["op"]["enum"]
     assert route.calls[0].request.headers["x-goog-api-key"] == "test-key"
+
+
+@respx.mock
+def test_the_tokens_the_call_cost_come_back_with_the_answer() -> None:
+    """A budget in cents that nothing is ever charged against is a field, not a limit."""
+    respx.post(URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": '{"op": "upscale"}'}]}}],
+                "usageMetadata": {"promptTokenCount": 214, "candidatesTokenCount": 11},
+            },
+        )
+    )
+
+    answer = Gemini(api_key="k").complete("...", schema={}, timeout_s=5)
+
+    assert (answer.prompt_tokens, answer.output_tokens) == (214, 11)
 
 
 @respx.mock
@@ -85,10 +103,54 @@ def test_a_blocked_or_empty_answer_is_an_error_rather_than_a_subscript_crash() -
 
 
 @respx.mock
-def test_an_http_failure_names_the_status() -> None:
-    respx.post(URL).mock(return_value=httpx.Response(429, text="quota"))
+def test_a_rate_limit_is_waited_out_once_rather_than_handed_back() -> None:
+    """A free tier's rate limit is a queue, not a verdict: the same request a second later
+    succeeds. Asking the user to rephrase a perfectly clear sentence is the worst answer
+    available."""
+    respx.post(URL).mock(
+        side_effect=[
+            httpx.Response(429, json={"error": {"details": [{"retryDelay": "0s"}]}}),
+            httpx.Response(
+                200, json={"candidates": [{"content": {"parts": [{"text": '{"op": "upscale"}'}]}}]}
+            ),
+        ]
+    )
 
-    with pytest.raises(ProviderError, match="429"):
+    answer = Gemini(api_key="k").complete("...", schema={}, timeout_s=30)
+
+    assert answer.text == '{"op": "upscale"}'
+
+
+@respx.mock
+def test_a_quota_that_survives_the_wait_is_reported_as_exhaustion_not_an_error() -> None:
+    """Out of quota for the day is not the same as wrong, and a measurement that scores it
+    as an error is measuring the free tier."""
+    respx.post(URL).mock(
+        return_value=httpx.Response(429, json={"error": {"details": [{"retryDelay": "0s"}]}})
+    )
+
+    with pytest.raises(ProviderExhaustedError, match="quota"):
+        Gemini(api_key="k").complete("...", schema={}, timeout_s=30)
+
+
+@respx.mock
+def test_no_time_left_means_no_retry() -> None:
+    """A retry that would land after the caller's deadline is a slower failure."""
+    route = respx.post(URL).mock(return_value=httpx.Response(429, text="slow down"))
+
+    with pytest.raises(ProviderExhaustedError):
+        Gemini(api_key="k").complete("...", schema={}, timeout_s=0.5)
+
+    assert route.call_count == 1, "it waited for a deadline that had already passed"
+
+
+@respx.mock
+def test_an_http_failure_names_the_status() -> None:
+    """Anything that is not a rate limit is reported as it arrived. 429 has its own path
+    above, because it is the one status that is worth waiting out."""
+    respx.post(URL).mock(return_value=httpx.Response(503, text="upstream unavailable"))
+
+    with pytest.raises(ProviderError, match="503"):
         Gemini(api_key="k").complete("...", schema={}, timeout_s=5)
 
 

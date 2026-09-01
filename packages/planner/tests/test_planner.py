@@ -6,8 +6,9 @@ from typing import Any
 
 import pytest
 from editgpt_core import Constraints, EditOp
-from editgpt_core.errors import ProviderError
-from editgpt_planner import Route, plan
+from editgpt_core.errors import ProviderError, ProviderExhaustedError
+from editgpt_planner import Completion, Route, plan
+from editgpt_planner.planner import OUT_OF_QUOTA
 
 IMPLEMENTED = frozenset(
     {EditOp.REMOVE, EditOp.ADD, EditOp.REPLACE, EditOp.BACKGROUND, EditOp.UPSCALE}
@@ -22,14 +23,14 @@ class Fake:
         self.calls = 0
         self.schemas: list[dict[str, Any]] = []
 
-    def complete(self, instruction: str, *, schema: dict[str, Any], timeout_s: float) -> str:
+    def complete(self, instruction: str, *, schema: dict[str, Any], timeout_s: float) -> Completion:
         self.calls += 1
         self.schemas.append(schema)
-        return self.answer
+        return Completion(text=self.answer, prompt_tokens=120, output_tokens=14)
 
 
 class Broken:
-    def complete(self, instruction: str, *, schema: dict[str, Any], timeout_s: float) -> str:
+    def complete(self, instruction: str, *, schema: dict[str, Any], timeout_s: float) -> Completion:
         raise ProviderError("429 quota exhausted")
 
 
@@ -80,6 +81,22 @@ def test_a_model_that_answers_with_prose_becomes_a_question_not_a_crash() -> Non
     assert made.route is Route.ASK
 
 
+def test_running_out_of_quota_is_recorded_as_its_own_reason() -> None:
+    """So a benchmark can tell "unmeasured" from "wrong". Scoring a row correct because
+    the model was never reached is a refusal that happens to be right for no reason."""
+
+    class Empty:
+        def complete(
+            self, instruction: str, *, schema: dict[str, Any], timeout_s: float
+        ) -> Completion:
+            raise ProviderExhaustedError("planner model quota")
+
+    made = plan("something vague", available=IMPLEMENTED, completer=Empty())
+
+    assert made.route is Route.ASK
+    assert made.reason == OUT_OF_QUOTA
+
+
 def test_a_model_that_is_down_degrades_to_a_question() -> None:
     """The model is a dependency, not a foundation. Rules keep working without it."""
     made = plan("that thing over there", available=IMPLEMENTED, completer=Broken())
@@ -127,12 +144,17 @@ def test_the_planner_keeps_its_own_deadline_rather_than_the_edit_s() -> None:
     seen: list[float] = []
 
     class Timed:
-        def complete(self, instruction: str, *, schema: dict[str, Any], timeout_s: float) -> str:
+        def complete(
+            self, instruction: str, *, schema: dict[str, Any], timeout_s: float
+        ) -> Completion:
             seen.append(timeout_s)
-            return '{"op": "upscale"}'
+            return Completion(text='{"op": "upscale"}')
 
     plan("something vague", available=IMPLEMENTED, completer=Timed())
     assert seen == [10.0]
+
+    plan("something vague", available=IMPLEMENTED, completer=Timed(), timeout_s=60.0)
+    assert seen[-1] == 60.0, "a caller that is measuring must be able to ask for longer"
 
     plan(
         "something vague",
@@ -141,6 +163,15 @@ def test_the_planner_keeps_its_own_deadline_rather_than_the_edit_s() -> None:
         completer=Timed(),
     )
     assert seen[-1] == 4.0, "a caller asking for less must get less, not the default"
+
+
+def test_what_the_model_cost_is_recorded_rather_than_logged_and_forgotten() -> None:
+    """`Constraints.max_cost_cents` has never been charged against anything. Counting the
+    tokens is the first half of making that budget real."""
+    made = plan("something vague", available=IMPLEMENTED, completer=Fake())
+
+    assert (made.prompt_tokens, made.output_tokens) == (120, 14)
+    assert plan("remove the car", available=IMPLEMENTED).prompt_tokens == 0
 
 
 def test_the_plan_records_which_lane_answered_and_how_long_it_took() -> None:

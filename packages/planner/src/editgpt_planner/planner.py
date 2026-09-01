@@ -18,12 +18,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from editgpt_core import Constraints, EditOp
-from editgpt_core.errors import ProviderError
+from editgpt_core.errors import ProviderError, ProviderExhaustedError
 from pydantic import ValidationError
 
 from editgpt_planner import rules
 from editgpt_planner.intent import Intent
-from editgpt_planner.llm import Completer, response_schema
+from editgpt_planner.llm import Completer, Completion, response_schema
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +49,9 @@ class Plan:
     question: str | None = None
     seconds: float = 0.0
     reason: str = ""
+    prompt_tokens: int = 0
+    output_tokens: int = 0
+    """What the model was asked and answered, in tokens. Zero when it was not asked."""
 
     @property
     def actionable(self) -> bool:
@@ -70,6 +73,9 @@ UNSUPPORTED = (
     "{op} is not implemented yet. This build can remove, add, replace, change the "
     "background and upscale."
 )
+OUT_OF_QUOTA = "the planner model was out of quota"
+"""Recorded distinctly so a benchmark can tell "unmeasured" from "wrong"."""
+
 UNCLEAR = (
     "I could not tell which edit that asks for. Try naming the operation and the "
     'subject — for example "remove the car on the left".'
@@ -82,6 +88,7 @@ def plan(
     available: Collection[EditOp],
     constraints: Constraints | None = None,
     completer: Completer | None = None,
+    timeout_s: float | None = None,
 ) -> Plan:
     """Turn one instruction into one plan.
 
@@ -94,6 +101,10 @@ def plan(
     `completer` is optional on purpose: with no model configured the rules still answer
     most instructions, and the rest become a question. The planner degrades to a parser
     rather than to an outage.
+
+    `timeout_s` overrides the planning deadline. For callers that are *measuring* rather
+    than serving: a benchmark reporting how long the model takes cannot also be truncating
+    it at ten seconds, or it reports its own deadline back to itself.
     """
     limits = constraints or Constraints()
     started = time.monotonic()
@@ -114,9 +125,14 @@ def plan(
         answer = completer.complete(
             instruction,
             schema=response_schema(Intent),
-            timeout_s=min(limits.max_seconds, PLANNING_TIMEOUT_S),
+            timeout_s=timeout_s or min(limits.max_seconds, PLANNING_TIMEOUT_S),
         )
-        proposed = Intent.model_validate_json(answer)
+        proposed = Intent.model_validate_json(answer.text)
+    except ProviderExhaustedError as error:
+        # Out of quota is not the same as wrong, and a measurement that scores it as an
+        # error is measuring the free tier rather than the planner.
+        log.warning("planner.out_of_quota", extra={"error": str(error)[:200]})
+        return _asked(started, OUT_OF_QUOTA, UNCLEAR)
     except ProviderError as error:
         # The model is a dependency, not a foundation. Its being down means the rules are
         # the whole planner for a while, which is a degradation the user can still use.
@@ -129,7 +145,14 @@ def plan(
         log.info("planner.rejected", extra={"errors": error.error_count()})
         return _asked(started, "the model's answer was not a usable edit", UNCLEAR)
 
-    return _finish(proposed, Route.MODEL, started, available, reason="answered by the model")
+    return _finish(
+        proposed,
+        Route.MODEL,
+        started,
+        available,
+        reason="answered by the model",
+        usage=answer,
+    )
 
 
 def _finish(
@@ -139,20 +162,36 @@ def _finish(
     available: Collection[EditOp],
     *,
     reason: str,
+    usage: Completion | None = None,
 ) -> Plan:
     seconds = round(time.monotonic() - started, 3)
+    spent = usage or Completion(text="")
     if intent.op not in available:
         return Plan(
             route=Route.ASK,
             question=UNSUPPORTED.format(op=intent.op.value),
             seconds=seconds,
             reason=f"{intent.op.value} has no implementation here",
+            prompt_tokens=spent.prompt_tokens,
+            output_tokens=spent.output_tokens,
         )
     log.info(
         "planner.planned",
-        extra={"route": route.value, "op": intent.op.value, "seconds": seconds},
+        extra={
+            "route": route.value,
+            "op": intent.op.value,
+            "seconds": seconds,
+            "tokens": spent.prompt_tokens + spent.output_tokens,
+        },
     )
-    return Plan(route=route, intent=intent, seconds=seconds, reason=reason)
+    return Plan(
+        route=route,
+        intent=intent,
+        seconds=seconds,
+        reason=reason,
+        prompt_tokens=spent.prompt_tokens,
+        output_tokens=spent.output_tokens,
+    )
 
 
 def _asked(started: float, reason: str, question: str) -> Plan:

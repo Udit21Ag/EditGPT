@@ -6,13 +6,14 @@ whatever process does the planning, and would be unable to run anywhere the mode
 """
 
 from editgpt_planner.intent import Intent
-from editgpt_planner.llm import Completer, Gemini, response_schema
+from editgpt_planner.llm import Completer, Completion, Gemini, response_schema
 from editgpt_planner.planner import Plan, Route, plan
 from editgpt_planner.rules import COLOURS
 
 __all__ = [
     "COLOURS",
     "Completer",
+    "Completion",
     "Gemini",
     "Intent",
     "Plan",

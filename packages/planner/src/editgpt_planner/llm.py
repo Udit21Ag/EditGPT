@@ -16,16 +16,24 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import httpx
-from editgpt_core.errors import ProviderError
+from editgpt_core.errors import ProviderError, ProviderExhaustedError
 from pydantic import BaseModel
 
 log = logging.getLogger(__name__)
 
 ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+RETRIES = 2
+"""Attempts at a rate-limited call, including the first.
+
+One retry, not five. A rate limit that survives a short wait is a quota that is gone for
+the day, and a planner cannot fix that by asking again — while every second spent trying
+is a second of the user's own deadline."""
 
 DEFAULT_MODEL = "gemini-3.6-flash"
 """Text only. The image models have no free tier — verified 2026-08-25, see the plan."""
@@ -45,10 +53,27 @@ Rules:
   only when it is unambiguous. Never invent a target."""
 
 
+@dataclass(frozen=True, slots=True)
+class Completion:
+    """An answer and what it cost.
+
+    The tokens are here rather than logged and forgotten because `Constraints` carries a
+    `max_cost_cents` that nothing was ever charged against. A budget nobody spends from is
+    a field, not a limit — and the same gap exists on the image provider, where the ledger
+    records `units=1, cents=0.0` for every call.
+    """
+
+    text: str
+    prompt_tokens: int = 0
+    output_tokens: int = 0
+
+
 class Completer(Protocol):
     """Anything that can answer with JSON matching a schema."""
 
-    def complete(self, instruction: str, *, schema: dict[str, Any], timeout_s: float) -> str: ...
+    def complete(
+        self, instruction: str, *, schema: dict[str, Any], timeout_s: float
+    ) -> Completion: ...
 
 
 def response_schema(model: type[BaseModel]) -> dict[str, Any]:
@@ -91,6 +116,25 @@ def _reduce(node: dict[str, Any], defs: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _retry_after(response: httpx.Response, default: float = 2.0) -> float:
+    """How long the API asked us to wait, capped so a long suggestion is not obeyed blindly."""
+    header = response.headers.get("retry-after")
+    if header and header.isdigit():
+        return min(float(header), MAX_BACKOFF_S)
+    try:
+        for detail in response.json().get("error", {}).get("details", []):
+            delay = str(detail.get("retryDelay", ""))
+            if delay.endswith("s") and delay[:-1].replace(".", "", 1).isdigit():
+                return min(float(delay[:-1]), MAX_BACKOFF_S)
+    except (ValueError, AttributeError):
+        pass
+    return default
+
+
+MAX_BACKOFF_S = 5.0
+"""The most a planner will sit still for. Past this the user is better served by a question."""
+
+
 @dataclass(frozen=True)
 class Gemini:
     """Google AI Studio's free text tier, over its REST API.
@@ -111,7 +155,7 @@ class Gemini:
     def is_configured(self) -> bool:
         return bool(self.api_key)
 
-    def complete(self, instruction: str, *, schema: dict[str, Any], timeout_s: float) -> str:
+    def complete(self, instruction: str, *, schema: dict[str, Any], timeout_s: float) -> Completion:
         if not self.api_key:
             raise ProviderError("no GEMINI_API_KEY; the planner has no model to ask")
 
@@ -124,15 +168,35 @@ class Gemini:
                 "temperature": self.temperature,
             },
         }
-        try:
-            response = httpx.post(
-                ENDPOINT.format(model=self.model),
-                headers={"x-goog-api-key": self.api_key},
-                json=payload,
-                timeout=timeout_s,
+        deadline = time.monotonic() + timeout_s
+        for attempt in range(1, RETRIES + 1):
+            try:
+                response = httpx.post(
+                    ENDPOINT.format(model=self.model),
+                    headers={"x-goog-api-key": self.api_key},
+                    json=payload,
+                    timeout=max(deadline - time.monotonic(), 1.0),
+                )
+            except httpx.HTTPError as error:
+                raise ProviderError(f"transport error: {error}") from error
+
+            if response.status_code != 429:
+                break
+
+            # A free tier's rate limit is a *queue*, not a failure: the same request a
+            # second later succeeds. Retried once, inside the caller's own deadline,
+            # because the alternative — asking the user to rephrase a sentence that was
+            # perfectly clear — is the worst answer available.
+            # Time left to wait *and still answer*. A retry that would land after the
+            # caller's deadline is not a retry, it is a slower failure.
+            budget = deadline - time.monotonic() - 1.0
+            wait = min(_retry_after(response), budget)
+            log.warning(
+                "planner.rate_limited", extra={"attempt": attempt, "wait_s": round(max(wait, 0), 2)}
             )
-        except httpx.HTTPError as error:
-            raise ProviderError(f"transport error: {error}") from error
+            if attempt == RETRIES or budget <= 0:
+                raise ProviderExhaustedError(f"planner model quota: {response.text[:200]}")
+            time.sleep(max(wait, 0.0))
 
         if response.status_code != 200:
             raise ProviderError(f"planner model {response.status_code}: {response.text[:300]}")
@@ -144,8 +208,18 @@ class Gemini:
             # A refusal or a safety block comes back as a 200 with no candidate. Reported
             # as a provider error rather than crashing on a subscript.
             raise ProviderError(f"no answer from the planner model: {str(body)[:300]}") from error
+        usage = body.get("usageMetadata", {})
+        answer = Completion(
+            text=text,
+            prompt_tokens=int(usage.get("promptTokenCount", 0)),
+            output_tokens=int(usage.get("candidatesTokenCount", 0)),
+        )
         log.info(
             "planner.completed",
-            extra={"model": self.model, "chars": len(text)},
+            extra={
+                "model": self.model,
+                "prompt_tokens": answer.prompt_tokens,
+                "output_tokens": answer.output_tokens,
+            },
         )
-        return text
+        return answer
