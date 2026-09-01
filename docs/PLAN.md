@@ -1,8 +1,8 @@
 # EditGPT — Master Plan
 
 > Agentic, prompt-driven image editing. Upload an image, say _"remove the car"_ or _"add a moustache"_,
-> optionally brush a region, get the edited image back — produced by a mesh of specialised agents
-> talking over A2A, calling MCP tools, under an orchestrator, on an 8 GB laptop.
+> optionally brush a region, get the edited image back — planned by an orchestrator, executed
+> through MCP tools, checked by a critic that can replan, on an 8 GB laptop.
 
 **Author:** f20230708@pilani.bits-pilani.ac.in · **Started:** 2026-08-25
 **Hard constraint:** 8 GB unified memory (MacBook Air M1). Every architectural decision below is downstream of this.
@@ -262,10 +262,9 @@ EditGPT/
 ├── apps/
 │   ├── web/                     # Next.js 15
 │   └── gateway/                 # FastAPI: auth, upload, jobs, SSE
-├── agents/                      # one A2A server per dir, own Dockerfile + agent-card.json
-│   ├── orchestrator/ intent/ perception/ edit/ compositor/ critic/ provenance/
-├── mcp/                         # FastMCP servers
-│   ├── vision_tools/ edit_tools/ quality_tools/
+├── apps/worker/                 # Celery: the job lifecycle and the edit step
+├── mcp/                         # FastMCP: vision_tools (planned, Phase 6)
+│                                # ~~agents/ — the A2A mesh, cut 1 Sep 2026~~
 ├── packages/
 │   ├── core/                    # EditSpec, AssetRef, MaskRef, errors, tracing
 │   ├── models/                  # ModelSlot, ONNX wrappers, download+quantise scripts
@@ -280,6 +279,28 @@ EditGPT/
 ## 5. Phased plan
 
 Sizing assumes solo work with heavy agent assistance. "Exit" = the objective gate that must pass before moving on.
+
+### Scope, revised 1 Sep 2026
+
+**What this project is for:** demonstrating ML, agentic and distributed-systems engineering
+under a hard device constraint, to people reading a CV — interviewers at Amazon, Flipkart,
+Google and similar, for data science, SDE, distributed systems and AI/ML roles. It will
+never serve a customer. Nobody will run it; someone may read it, and someone will ask about
+it for forty minutes.
+
+That changes what "finished" means. **A decision that was measured and written down is worth
+more than a feature that works**, because the first can be defended in an interview and the
+second cannot be seen. Two consequences, applied to everything below:
+
+- **Operations stop earning.** Deploying, staging, secrets rotation, uptime, accessibility
+  audits and Lighthouse scores produce nothing a reader can evaluate. The deployment *audit*
+  ([DEPLOYMENT.md](DEPLOYMENT.md)) is kept and the deployment itself is cut: "here is what
+  hosting this costs and why" is a better systems answer than a URL that resolves.
+- **The agentic layer is the gap.** What exists today is an excellent job pipeline. The claim
+  on the front of this document — orchestrator, planner, critic — is the part that is not yet
+  built, and it is the part the target roles are hiring for.
+
+Phases 6–10 are rewritten below against that. Phases 0–5 and 9 stand as delivered.
 
 ### Phase 0 — Feasibility spike (3–4 days) · ✅ **COMPLETE** — see [ADR-0001](adr/0001-model-routing.md)
 
@@ -419,21 +440,50 @@ all 11 removals identical on cost and pass sequence. Only `bbox_iou` moved, deli
 it now measures the raw mask rather than the dilated one, so it scores grounding rather than
 the eraser's footprint.
 
-### Phase 6 — Agent mesh (6–7 days)
+### Phase 6 — Agent mesh · **cut to one MCP server (1 day)**
 
-Wrap each capability as an **A2A server**: Agent Card, executor, task lifecycle, SSE streaming, health.
-Implement the progressive-disclosure skill manifests. Agent registry + discovery with card caching.
-Auth between agents (shared-secret JWT, and validate cards). Contract tests per agent; `a2a-conformance` subagent in CI.
+~~Wrap each capability as an A2A server: Agent Card, executor, task lifecycle, SSE streaming, health.
+Agent registry + discovery with card caching. Auth between agents (shared-secret JWT).
+Contract tests per agent; `a2a-conformance` subagent in CI.~~
 
-**Exit:** every capability reachable only via A2A; the orchestrator imports no agent code.
+Cut. Six agent servers, a registry, card caching and inter-agent JWT is a week of plumbing
+whose entire output is one sentence — *"capabilities are reached across a boundary, not
+imported"* — and that sentence is true of a single tool server too.
 
-### Phase 7 — Orchestrator & critic loop (5–6 days)
+**What is kept:** one **MCP server over the vision tools** — ground, segment, erase — with
+progressive disclosure, results carrying refs rather than pixels, and the orchestrator
+importing no model code. That is the same architectural claim at a tenth of the cost, in a
+protocol a reader recognises.
 
-LLM planner producing a typed DAG (constrained decoding to a Pydantic schema, not free-form JSON) ·
-deterministic fast-paths for the 7 known ops (LLM only plans the ambiguous ones — cheaper and far more reliable) ·
-budget enforcement (wall-clock, retries, cents) · CriticAgent scoring + bounded replan · cancellation · Langfuse tracing.
+**Exit:** the orchestrator reaches perception through the MCP server only; the tier-1 tool
+list stays small and `enable_toolset` reveals the rest.
 
-**Exit:** critic-triggered retry demonstrably fixes a seeded failure case in the eval set.
+### Phase 7 — Orchestrator & critic loop (3 days) · **next, and the priority**
+
+The one part of the original design that has no substitute. Everything under it already
+works; this is what makes it agentic rather than scripted.
+
+**Intent → typed plan.** A free-text instruction becomes an `EditSpec` by **constrained
+decoding into the Pydantic schema**, not by parsing free-form JSON out of a model's prose.
+The schema is the contract that already exists; the planner fills it or fails validation.
+
+**Deterministic fast paths.** The seven known operations never reach the LLM. "remove the
+car" is decidable by rule, and routing around a model wherever the task is decidable is the
+answer to *how do you make an LLM reliable and cheap* — the planner is for the ambiguous
+remainder, and every fast-path hit is a request that cannot hallucinate, cost anything or
+time out.
+
+**Budgets, enforced.** Wall-clock, retry count and cents, checked before each hop and on
+exhaustion — the ledger and `Constraints` already carry the fields.
+
+**The critic.** Score the result with the metrics that already exist — `fill_metrics`, mask
+coverage, the blank-frame check — and on a bad score **replan within a bound**: escalate
+MI-GAN → LaMa, widen dilation, or fall back to returning candidates for disambiguation
+rather than a confident wrong edit.
+
+**Exit:** seeded failures in the eval set, and a number — *critic-triggered retry fixed k of
+N* — plus the cost and latency the loop added. A critic that cannot be shown to fix
+something is decoration.
 
 ### Phase 8 — Frontend (7–9 days) · **in progress**
 
@@ -470,11 +520,14 @@ cross-origin call was blocked before it was sent. The frontend could never have 
 Nothing else could have caught it — curl does not preflight, and the component tests
 replace `fetch`.
 
-**Not yet:** pan/zoom, lasso, mask-overlay opacity, quota display, a full a11y audit
-(labels, roles and live regions are in place; contrast and focus order are not audited),
-the bottom-sheet mobile layout, and Lighthouse ≥90.
+**Cut, 1 Sep 2026:** pan/zoom, lasso, mask-overlay opacity, quota display, the a11y contrast
+and focus-order audit, the bottom-sheet mobile layout, and Lighthouse ≥90. The frontend's job
+in this project is to make a ninety-second recording legible, and it already does — the
+candidate picker, the brush, magic select, the step timeline and the before/after wipe are
+what the recording shows.
 
-**Exit:** Lighthouse ≥90 across the board on mobile; both flows pass E2E.
+**Exit (met):** both headline flows pass E2E against a real browser, a real Clerk session,
+the gateway, the worker and the models.
 
 ### Phase 9 — Hardening & observability (4–5 days) · **in progress**
 
@@ -530,33 +583,46 @@ signed URL expiry + object lifecycle (auto-delete after N days) · OTel spans ac
 structured JSON logs · Sentry · load test with `locust` (concurrency 1 worker — find the queue depth that breaks) ·
 graceful degradation when every provider is quota-exhausted · **runbook**.
 
-### Phase 10 — Ship (3–4 days) · **in progress**
+### Phase 10 — Ship · **redefined: the write-up, not a deployment (2 days)**
 
-Vercel deploy · agents to HF Spaces (Docker) + gateway to Fly.io · Upstash/Neon/R2 prod config · secrets via GH
-environments · staging environment · README with architecture diagram + GIF demo · ADR index · API docs from OpenAPI ·
-CONTRIBUTING · `make eval` baseline committed · v1.0.0 tag.
+~~Vercel deploy · agents to HF Spaces (Docker) + gateway to Fly.io · staging environment ·
+secrets via GH environments · CONTRIBUTING · v1.0.0 tag.~~ Cut. Nobody clicks the link.
 
-**Audit first, 1 Sep 2026 — [docs/DEPLOYMENT.md](DEPLOYMENT.md).** Two of the three hosting
-choices above stopped being true while the rest of the project was built. Creating a Docker
-Space on Hugging Face now needs a paid plan, and Fly has had no free tier for new accounts
-since October 2024; Koyeb closed to new signups and Oracle halved its free ARM allowance
-this June. Everything else fits a free tier with room to spare — Vercel, Neon, Upstash, R2,
-Clerk — because the gateway measures **86 MB idle and 126 MB under uploads**.
+**The audit is kept as the artifact.** [DEPLOYMENT.md](DEPLOYMENT.md), 1 Sep 2026, measured
+what each process needs against what the free tiers still give: the gateway is 86 MB idle and
+126 MB under uploads, while the worker holds a 2200 MB ceiling for thirteen seconds and then
+nothing — a scale-to-zero profile against a market where every remaining free fixed instance
+is 512 MB. Two of the three hosting choices this plan was written around had quietly stopped
+being true. *That* is the deployment answer worth having in an interview; a running URL is
+not, and would cost €5 a month to keep true.
 
-**The worker is the whole problem.** 2200 MB ceiling, 1372 MB for the detector alone, ~13 s
-per edit and idle in between: the profile that scale-to-zero is for, and every remaining
-free fixed instance is 512 MB. Three real options, costed in the audit — Cloud Run at 2 GiB
-(~14,000 edits/month inside the free allowance, but the worker stops being a Celery consumer
-and becomes HTTP-triggered), a €5/month box, or an Oracle free VM if one can be provisioned.
-**Not decided; an ADR follows the decision, not this document.**
+**What is built instead:**
 
-Two things the audit could not settle and that block a confident deploy: what one Workers AI
-inpainting call costs in neurons — the ledger records `units=1, cents=0.0`, which is true for
-the local lane and useless for the remote one — and whether image bytes should keep leaving
-through the gateway, when R2's egress is free and the signing seam could presign R2 URLs
-directly.
+- **README** — the constraint in the first line, an architecture diagram, the results table,
+  a ninety-second demo recording, and four links into the ADRs of the form *problem →
+  measurement → decision*.
+- **A one-page results summary** — collecting numbers that are currently scattered
+  across this plan, the ADRs and the debt register: RefCOCOg mIoU 0.389 → 0.469 on the model
+  switch, ambiguity margin 0.089 with 96.0% against 0.0% changed-region on the picker, the
+  detector's 1372 MB peak against a 2200 MB ceiling, 12.8 s end to end, upload p90 79 ms.
+- **A recording**, which replaces the deployment.
 
-**Total: ~9–11 weeks solo part-time; ~5 weeks focused.**
+**Exit:** a reader who spends five minutes on the repository can state the central constraint,
+the routing decision that follows from it, and one thing that was measured and then *not*
+shipped because the measurement said not to.
+
+### What was cut, and why
+
+| Cut                                                      | Why it earns nothing here                                       |
+| -------------------------------------------------------- | ---------------------------------------------------------------- |
+| Deploying to Cloud Run / Fly / Oracle, staging, secrets  | Nobody runs it; the costed audit is the better answer            |
+| A2A mesh: registry, discovery, card caching, agent JWT   | One MCP server makes the same claim in a day                     |
+| OTel spans, Sentry (TD-025)                              | Correlated JSON logs already answer the question at this size    |
+| Frontend polish, a11y audit, Lighthouse                  | No signal for the roles this is aimed at                         |
+| OpenAPI docs site, CONTRIBUTING, v1.0.0 tag              | Ceremony                                                         |
+| Further hardening                                        | Auth, CORS, scrubbing, signed URLs and lifecycle are done. Stop. |
+
+**Remaining: ~6 days.** Orchestrator and critic (3) · MCP vision server (1) · README, RESULTS and the recording (2). Everything else is delivered or cut.
 
 ---
 
@@ -567,8 +633,8 @@ directly.
 | Unit         | pytest, hypothesis      | mask RLE round-trips for any shape; tile-plan covers the image with no gaps; EditSpec validation |
 | **Memory**   | pytest + psutil         | peak RSS < 1.6 GB over a 12-step workload; ≤1 resident model; no leak over 50 iterations         |
 | Provider     | respx / VCR cassettes   | zero real API calls in CI; failover order; circuit breaker opens and recovers                    |
-| A2A contract | a2a-sdk test client     | every Agent Card validates; every advertised skill is invocable; SSE task lifecycle correct      |
 | MCP          | FastMCP in-proc client  | tier-1 tool list is small; `enable_toolset` reveals tier-2; results carry refs not pixels        |
+| Planner      | pytest + recorded LLM   | a malformed completion fails validation rather than reaching the pipeline; fast paths never call the model |
 | Integration  | docker compose + pytest | upload → job → SSE → artifact, with fake providers                                               |
 | **Eval**     | `make eval`             | quality/latency/cost regression vs. `main`, commented on the PR                                  |
 | Frontend     | Vitest + RTL            | mask store reducers, undo/redo, prompt parsing UI                                                |
@@ -583,7 +649,7 @@ Determinism: pin seeds, freeze time, snapshot masks as PNG hashes, and never let
 
 | Risk                                           | Mitigation                                                                                                                                           |
 | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **8 GB is exceeded anyway**                    | Phase 0 measures before designing; RSS test in CI; heavy agents relocate to HF Space 16 GB; tile at 512                                              |
+| **8 GB is exceeded anyway**                    | Phase 0 measures before designing; RSS test in CI; tile at 512. ~~Relocate to a 16 GB HF Space~~ — free Docker Spaces ended, see [DEPLOYMENT.md](DEPLOYMENT.md)  |
 | Free tier changes or dies                      | Provider abstraction + 3-deep failover from day one; quota tracked in the cost ledger; local LaMa always works offline                               |
 | Text→mask picks the wrong object               | Confidence threshold → return candidates → user taps the right one. The brush is always the escape hatch                                             |
 | Free generative quality is poor                | Measured and accepted: SD-1.5 handles additions weakly and cannot remove at all. Removal is local; enabling Gemini billing lifts the cap in one line |
@@ -596,7 +662,12 @@ Determinism: pin seeds, freeze time, snapshot masks as PNG hashes, and never let
 
 ## 8. Immediate next actions
 
-1. `git init` + push an empty repo with branch protection.
-2. **Phase 0 spike** — the benchmark table is the input to every later decision.
-3. Get the Gemini AI Studio key and a Cloudflare R2 bucket now (both free, both 5 minutes).
-4. Then Phase 1, then the harness in Phase 2 — and let the harness build the rest.
+1. **Orchestrator and critic** — constrained decoding into `EditSpec`, deterministic fast
+   paths for the seven ops, enforced budgets, and a critic that replans within a bound.
+2. **Seed failures into the eval set** and report what the critic fixed, with the latency and
+   cost it added. The number is the deliverable, not the loop.
+3. **One MCP server** over ground / segment / erase, with the orchestrator importing no model
+   code.
+4. **README, a one-page results summary and a ninety-second recording** — the part a reader actually sees.
+
+Not next, and deliberately: deploying anything, the agent mesh, spans, frontend polish.
