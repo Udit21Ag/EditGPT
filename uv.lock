@@ -1031,7 +1031,7 @@ dev = [
     { name = "types-psutil", specifier = ">=6.0" },
 ]
 load = [{ name = "locust", specifier = ">=2.31" }]
-mcp = [{ name = "mcp", specifier = ">=1.2" }]
+mcp = [{ name = "mcp", specifier = ">=2.0" }]
 
 [[package]]
 name = "editgpt-core"

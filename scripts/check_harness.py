@@ -32,6 +32,10 @@ def _nested_agent_docs() -> list[Path]:
 
 DOCS = [
     ROOT / "AGENTS.md",
+    # The README is the one document written for a reader who will never open another,
+    # which makes a dead link or a stale command in it the most expensive kind. It is
+    # checked with the rest rather than trusted to stay true on its own.
+    ROOT / "README.md",
     *sorted((ROOT / "harness").rglob("*.md")),
     *sorted((ROOT / "docs").glob("*.md")),
     *_nested_agent_docs(),

@@ -34,7 +34,7 @@ paid. It still stays visible.
 
 | ID     | Title                                                                | Status   | Priority | Area          |
 | ------ | -------------------------------------------------------------------- | -------- | -------- | ------------- |
-| TD-001 | CLIPSeg runs on torch, costing ~1 GB of overhead                     | open     | P2       | models        |
+| TD-001 | CLIPSeg runs on torch, costing ~1 GB of overhead                     | open     | P3       | models        |
 | TD-002 | Cast shadows survive object removal                                  | accepted | P1       | models        |
 | TD-003 | Both erasers smear geometric structure                               | open     | P2       | models        |
 | TD-004 | The mask swallows objects that occlude or touch the target           | open     | P1       | models        |
@@ -64,7 +64,7 @@ paid. It still stays visible.
 
 ### TD-001 — CLIPSeg runs on torch, costing ~1 GB of overhead
 
-Status: open · Priority: P2 · Identified: 2026-08-25 · Updated: 2026-08-27 · Area: `packages/models`
+Status: open · Priority: P3 · Identified: 2026-08-25 · Updated: 2026-09-01 · Area: `packages/models`
 **Problem:** text grounding used a torch model where every other model is ONNX. Measured
 peak resident set ~1188 MB for weights of ~150 MB.
 **Largely addressed on 2026-08-27.** ADR-0002 moved the default text lane to Grounding
@@ -72,8 +72,13 @@ DINO, which is ONNX, so **nothing on the shipping path loads torch**. CLIPSeg re
 behind the optional `text` extra as the fallback for "stuff" nouns — sky, grass, a wall —
 which an object detector grounds poorly, and `evals/run.py` still reaches it when the
 detector abstains.
-**Why it still matters:** a deployment that wants that fallback still pays ~1188 MB for
-it, and the `text` extra is still installed by default in the root project.
+**Further narrowed on 2026-09-01.** The `text` extra moved out of the root project's
+default dependencies into `bench`, where the two things that actually use it live —
+`make bench-grounding-clipseg`, which is where ADR-0002's comparison numbers come from, and
+`evals/run.py`'s fallback. `uv sync` no longer installs torch, which is **502 MB of the
+1.4 GB environment** and the same weight off any image built from the default closure.
+**Why it still matters:** a deployment that wants that fallback still pays ~1188 MB of
+resident memory for it, and the benchmark path still needs the 502 MB on disk.
 **Workaround:** the detector answers first and abstains rarely (0 of 250 held-out
 phrases at the default gate), so the fallback is seldom reached in practice.
 **Why deferred:** it is no longer the binding memory constraint, and exporting CLIPSeg is

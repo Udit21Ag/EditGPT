@@ -124,6 +124,23 @@ with the target. Every number for both cases looked healthy. See TD-004.
 - **Human evaluation** has not been run. When it is: blind A/B, ≥5 raters, a fixed
   criterion per question, and report inter-rater agreement or do not report at all.
 
+## Unmeasured is not wrong
+
+A measurement that scores its own failures as the system's is worse than no measurement.
+`benchmarks/planner.py` learned this on its first run: thirty model calls in ninety seconds
+exhausted the free tier's quota, eight instructions came back as questions because the model
+was never reached, and the summary counted all eight as planner errors — reporting 0.855
+where the answer over rows that were actually answered was 1.000.
+
+Two rules follow, and they apply to anything measured through a metered API:
+
+1. **Pace the run.** `--rpm` exists so a benchmark is not measuring a rate limit. A number
+   produced faster than the provider will serve it is a number about the provider.
+2. **Exclude what was not answered, and say how many.** Rows the model never saw are
+   counted separately, never scored. The subtler half: a row that happens to be *correct*
+   because nothing was reached — a refusal that is right for no reason — inflates the score
+   in the direction you want, which is exactly why it has to go.
+
 ## Ablations worth running
 
 Each names the hypothesis it tests. Anything that does not is noise.

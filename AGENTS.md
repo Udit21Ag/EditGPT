@@ -15,12 +15,16 @@ Stack: Python 3.12 (uv workspace) · FastAPI · ONNX Runtime · PyTorch (one mod
 TypeScript · Next.js 15 · Tailwind v4 · pnpm workspace · Docker Compose · GitHub Actions.
 
 ```
-packages/core        contracts: EditSpec, Job, AssetRef, MaskRef, RLE codec, metrics
-packages/models      ModelSlot, grounding, erasers, multi-pass pipeline, thresholds
+packages/core        contracts: EditSpec, Job, AssetRef, MaskRef, RLE codec, metrics,
+                     the critic's verdict and the replan policy
+packages/models      ModelSlot, grounding, erasers, multi-pass pipeline, thresholds, critic
+packages/planner     instruction -> typed plan: rules first, the model for the rest
 packages/providers   remote provider protocol, circuit breaker, failover
-packages/store       content-addressed assets, the schema, job persistence, progress
-apps/gateway         FastAPI: upload, job intake, SSE progress, rate limits
-apps/worker          Celery: the job lifecycle
+packages/store       content-addressed assets, the schema, job persistence, progress,
+                     the lifecycle sweep
+apps/gateway         FastAPI: upload, planning, job intake, SSE progress, rate limits
+apps/worker          Celery: the job lifecycle, the edit, the review loop
+apps/mcp             the vision tools over MCP, as a client of the gateway
 apps/web             Next.js frontend
 evals/               golden image set and its runner
 benchmarks/          held-out datasets and the threshold fitting
@@ -80,7 +84,13 @@ Verified against the repository. Do not invent alternatives.
 | full local stack                 | `make dev`                                                                                 |
 | start redis + postgres           | `make compose-up` · stop with `make compose-down`                                          |
 | apply / create a migration       | `make migrate` · `make migration NAME="..."`                                               |
-| held-out benchmarks              | `make bench-grounding` · `make bench-removal` · `make bench-ambiguity` · `make bench-tune` |
+| held-out benchmarks              | `make bench-grounding` · `make bench-removal` · `make bench-ambiguity` · `make bench-tune` · `make bench-planner` |
+| plan an instruction, measured    | `make bench-planner` · `make bench-planner MODEL=1` to ask the model too      |
+| the vision tools over MCP        | `make mcp` (needs a gateway running)                                        |
+| delete stored bytes nothing uses | `make sweep` — reports only; `make sweep APPLY=1` deletes                   |
+| the housekeeping scheduler       | `make beat`                                                                 |
+| load test the gateway            | `make load` (needs the stack up)                                            |
+| every target, with its purpose   | `make help`                                                                 |
 
 `make check` runs exactly what CI runs, in CI's order — literally: each CI step invokes
 the corresponding Makefile target, so the two cannot drift.

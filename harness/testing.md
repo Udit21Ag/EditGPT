@@ -172,6 +172,12 @@ itself.**
 Sockets are disabled in the default run. Stub providers. A test that genuinely needs the
 network is marked `live` and runs nightly.
 
+The root `conftest.py` also **deletes credential variables from the environment**, so no
+unmarked test can reach a real account even by accident. A `live` test that needs a key
+therefore reads it from `.env` itself (`packages/planner/tests/test_live.py` is the
+pattern) rather than asking for the guard to be loosened for everybody: the scrub protects
+the fast tier, and the live tier exists precisely to spend real resources.
+
 ## Markers
 
 | Marker    | Meaning                                         | In `make check`?   |
