@@ -66,7 +66,7 @@ Verified against the repository. Do not invent alternatives.
 | Purpose                          | Command                                                                                    |
 | -------------------------------- | ------------------------------------------------------------------------------------------ |
 | install everything               | `make setup`                                                                               |
-| download model weights (~552 MB) | `make models`                                                                              |
+| download model weights (~527 MB) | `make models`                                                                              |
 | **the gate**                     | `make check`                                                                               |
 | fast inner loop (Python only)    | `make check-fast`                                                                          |
 | lint / format check              | `make lint` · fix with `make fmt`                                                          |

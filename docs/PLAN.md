@@ -530,11 +530,31 @@ signed URL expiry + object lifecycle (auto-delete after N days) · OTel spans ac
 structured JSON logs · Sentry · load test with `locust` (concurrency 1 worker — find the queue depth that breaks) ·
 graceful degradation when every provider is quota-exhausted · **runbook**.
 
-### Phase 10 — Ship (3–4 days)
+### Phase 10 — Ship (3–4 days) · **in progress**
 
 Vercel deploy · agents to HF Spaces (Docker) + gateway to Fly.io · Upstash/Neon/R2 prod config · secrets via GH
 environments · staging environment · README with architecture diagram + GIF demo · ADR index · API docs from OpenAPI ·
 CONTRIBUTING · `make eval` baseline committed · v1.0.0 tag.
+
+**Audit first, 1 Sep 2026 — [docs/DEPLOYMENT.md](DEPLOYMENT.md).** Two of the three hosting
+choices above stopped being true while the rest of the project was built. Creating a Docker
+Space on Hugging Face now needs a paid plan, and Fly has had no free tier for new accounts
+since October 2024; Koyeb closed to new signups and Oracle halved its free ARM allowance
+this June. Everything else fits a free tier with room to spare — Vercel, Neon, Upstash, R2,
+Clerk — because the gateway measures **86 MB idle and 126 MB under uploads**.
+
+**The worker is the whole problem.** 2200 MB ceiling, 1372 MB for the detector alone, ~13 s
+per edit and idle in between: the profile that scale-to-zero is for, and every remaining
+free fixed instance is 512 MB. Three real options, costed in the audit — Cloud Run at 2 GiB
+(~14,000 edits/month inside the free allowance, but the worker stops being a Celery consumer
+and becomes HTTP-triggered), a €5/month box, or an Oracle free VM if one can be provisioned.
+**Not decided; an ADR follows the decision, not this document.**
+
+Two things the audit could not settle and that block a confident deploy: what one Workers AI
+inpainting call costs in neurons — the ledger records `units=1, cents=0.0`, which is true for
+the local lane and useless for the remote one — and whether image bytes should keep leaving
+through the gateway, when R2's egress is free and the signing seam could presign R2 URLs
+directly.
 
 **Total: ~9–11 weeks solo part-time; ~5 weeks focused.**
 

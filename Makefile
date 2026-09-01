@@ -29,7 +29,7 @@ setup:  ## Install every dependency, Python and Node
 	$(UV) sync --all-extras
 	$(PNPM) install
 
-models:  ## Download the model weights (~285 MB) into the local cache
+models:  ## Download the model weights (~527 MB) into the local cache
 	$(PY) python -m editgpt_models.download
 
 # ---------------------------------------------------------------- the contract

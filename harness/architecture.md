@@ -235,7 +235,11 @@ lets the log keep the detail.
   benchmark and the stack do not contend for the same 8 GB.
 - **CI:** GitHub Actions — `check.yml` per PR, `memory.yml` nightly with real weights.
 - **Target:** frontend on a static host, gateway on a small instance, heavy model stages
-  on a larger-memory host. Not yet deployed.
+  on a larger-memory host. Not yet deployed. `docs/DEPLOYMENT.md` measures what each
+  process needs against what the free tiers still offer, and the shape of the answer is
+  that **only the worker is hard**: 86 MB for the gateway against a 2200 MB ceiling for the
+  worker, whose ~13 s of work and long idle is a scale-to-zero profile, not a fixed-instance
+  one. Read it before writing any deployment configuration; it is a survey, not a decision.
 
 ## Security architecture
 
